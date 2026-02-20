@@ -14,7 +14,6 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.37.0",
     "@meticulous-home/espresso-api": "^0.10.8",
     "@modelcontextprotocol/sdk": "^1.10.0",
     "zod": "^3.23.0"

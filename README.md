@@ -1,6 +1,8 @@
 # Meticulous Espresso MCP Server
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that gives Claude Code full control over your Meticulous home espresso machine.
+A [Model Context Protocol](https://modelcontextprotocol.io) server that gives Claude full control over your Meticulous home espresso machine. Works with Claude Desktop and Claude Code.
+
+No Anthropic API key required — Claude handles all the AI reasoning. This server handles the machine.
 
 ## What it does
 
@@ -10,22 +12,25 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server that gives Cl
 - **Analyze shots** and get concrete recipe improvement suggestions
 - **Manage profiles** on the machine (list, load, save, delete)
 - **Control the machine** (start, stop, tare, preheat)
-- **Fix broken recipes** — auto-repairs malformed JSON against the official schema
+- **Validate recipes** — checks and auto-repairs malformed JSON before sending to the machine
 
 ## Setup
 
-You only need three things: the repo URL, your machine's local IP, and an Anthropic API key.
+You only need two things: your machine's local IP and a repo URL.
 
 ### Environment variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `METICULOUS_IP` | **Yes** | Local IP of your Meticulous machine (find it in your router or the machine's settings) |
-| `ANTHROPIC_API_KEY` | Yes (for AI tools) | Get one at [console.anthropic.com](https://console.anthropic.com) |
 
 ### Option A — Zero install (recommended)
 
-No cloning or building required. Add this to your `~/.claude/claude_code_config.json`:
+No cloning or building required. Add this to your Claude config:
+
+**Claude Desktop** — `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+**Claude Code** — `~/.claude/claude_code_config.json`
 
 ```json
 {
@@ -34,15 +39,14 @@ No cloning or building required. Add this to your `~/.claude/claude_code_config.
       "command": "npx",
       "args": ["-y", "github:YOUR_USERNAME/meticulous-mcp-server"],
       "env": {
-        "METICULOUS_IP": "192.168.1.x",
-        "ANTHROPIC_API_KEY": "sk-ant-..."
+        "METICULOUS_IP": "192.168.1.x"
       }
     }
   }
 }
 ```
 
-The first time Claude Code starts, `npx` will download the repo, run `npm install`, build it automatically, and launch the server. Subsequent starts are instant from cache.
+The first time Claude starts, `npx` will download the repo, run `npm install`, build it automatically, and launch the server. Subsequent starts are instant from cache.
 
 ### Option B — Clone and build locally
 
@@ -52,7 +56,7 @@ cd meticulous-mcp-server
 npm install   # also runs the build via the prepare script
 ```
 
-Then point Claude Code at the built file:
+Then point Claude at the built file:
 
 ```json
 {
@@ -61,15 +65,14 @@ Then point Claude Code at the built file:
       "command": "node",
       "args": ["/absolute/path/to/meticulous-mcp-server/dist/index.js"],
       "env": {
-        "METICULOUS_IP": "192.168.1.x",
-        "ANTHROPIC_API_KEY": "sk-ant-..."
+        "METICULOUS_IP": "192.168.1.x"
       }
     }
   }
 }
 ```
 
-Restart Claude Code and you should see the meticulous server in your MCP list.
+Restart Claude and you should see the meticulous server in your MCP list.
 
 ---
 
@@ -111,25 +114,23 @@ Restart Claude Code and you should see the meticulous server in your MCP list.
 | `rate_shot` | Mark a shot as like / dislike / null |
 | `search_historical_profiles` | Find past versions of a profile |
 
-### AI Recipe Tools
+### Recipe Tools
 
 | Tool | Description |
 |------|-------------|
-| `generate_recipe` | Natural language → validated profile JSON |
-| `tailor_recipe` | Modify a recipe based on feedback |
-| `validate_recipe` | Check schema + optional auto-fix |
-| `analyze_shot_and_suggest` | Shot data + tasting notes → recipe improvements |
+| `validate_recipe` | Check schema + optional auto-fix for simple issues |
+| `get_shot_data_for_analysis` | Fetch full shot + profile data for Claude to analyze |
 
 ---
 
-## Example Claude Code prompts
+## Example prompts
 
 ```
-Generate a recipe for a washed Ethiopian light roast, 18g dose, 1:2.5 ratio.
+Generate a recipe for a washed Ethiopian light roast, 18g dose, 1:2.5 ratio, and save it to the machine.
 ```
 
 ```
-My last shot tasted too bitter and astringent. Analyze it and suggest changes to the recipe.
+My last shot tasted too bitter and astringent. Pull the shot data and suggest changes to the recipe.
 ```
 
 ```
@@ -148,18 +149,17 @@ Fix this recipe JSON, it has validation errors. [paste broken JSON]
 
 ## Recipe Schema Reference
 
-The Meticulous machine uses a precise JSON profile format. Key rules:
+The Meticulous machine uses a precise JSON profile format. Claude knows this schema and will generate valid profiles automatically.
 
+Key rules:
 - `name`, `id` (UUID v4), `author`, `author_id` (UUID v4) — all required
 - `temperature` — Celsius (88-96 typical)
 - `final_weight` — yield in grams
-- `stages` — array of extraction phases:
-  - `type`: `"flow"` (ml/s) or `"pressure"` (bar)
-  - `dynamics.points`: `[[time_sec, value], ...]` — control curve
-  - `exit_triggers` — required, last stage must exit on `weight`
+- `stages` — array of extraction phases, each with `type` (`"flow"` or `"pressure"`), `dynamics.points` (`[[time_sec, value], ...]`), and `exit_triggers`
+- Last stage must exit on `weight` = `final_weight`
 - `previous_authors` and `variables` — required arrays (can be empty `[]`)
 
-The AI tools enforce this schema automatically and validate before loading to the machine.
+`save_profile` and `load_profile` validate the schema automatically before sending to the machine.
 
 ---
 
@@ -168,7 +168,7 @@ The AI tools enforce this schema automatically and validate before loading to th
 ```
 meticulous-mcp-server/
 ├── src/
-│   └── index.ts      # All 20 MCP tools
+│   └── index.ts      # All MCP tools
 ├── dist/             # Compiled output (after npm run build)
 ├── package.json
 ├── tsconfig.json

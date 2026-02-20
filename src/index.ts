@@ -1,20 +1,21 @@
 /**
  * Meticulous Espresso MCP Server
  *
- * A Model Context Protocol server that gives Claude Code full control over
+ * A Model Context Protocol server that gives Claude full control over
  * your Meticulous home espresso machine — recipe generation, shot history,
- * machine control, and AI-powered recipe tailoring.
+ * machine control, and profile management.
+ *
+ * No API key required. Claude (Desktop or Code) handles all AI reasoning;
+ * this server handles all machine communication.
  *
  * Environment variables:
- *   METICULOUS_IP      - IP of your Meticulous machine on your local network (required)
- *   ANTHROPIC_API_KEY  - Your Anthropic API key (for recipe generation/tailoring)
+ *   METICULOUS_IP  - IP of your Meticulous machine on your local network (required)
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio";
 import { z } from "zod";
 import Api from "@meticulous-home/espresso-api";
-import Anthropic from "@anthropic-ai/sdk";
 import { randomUUID } from "crypto";
 
 // ============================================================
@@ -38,135 +39,35 @@ const BASE_URL = MACHINE_IP.startsWith("http")
 // Fresh Api instance per call — avoids stale socket state
 const getApi = () => new Api(undefined, BASE_URL);
 
-// Claude client for recipe generation & tailoring
-const anthropic = new Anthropic(); // reads ANTHROPIC_API_KEY from env
-
 // ============================================================
-// RECIPE SCHEMA PROMPT
-// This is what made Ollama fail — Claude handles it perfectly
-// with this detailed, example-rich system prompt.
+// RECIPE SCHEMA REFERENCE
+//
+// When generating or modifying profiles, Claude should follow
+// these rules. They are also embedded in the tool descriptions
+// for save_profile and load_profile.
+//
+// Required top-level fields:
+//   version: 1
+//   name: string
+//   id: UUID v4
+//   author: string
+//   author_id: UUID v4
+//   temperature: number (Celsius, 88-96 typical)
+//   final_weight: number (yield grams, e.g. 36)
+//   previous_authors: []
+//   variables: []
+//   stages: array (non-empty)
+//
+// Each stage:
+//   name, key, type ("flow" | "pressure")
+//   dynamics.points: [[time_sec, value], ...]  — starts at [0, x]
+//   dynamics.over: "time"
+//   dynamics.interpolation: "linear" | "curve"
+//   exit_triggers: array (non-empty)
+//   limits: optional safety caps
+//
+// Last stage MUST exit on: { type: "weight", value: <final_weight> }
 // ============================================================
-
-const RECIPE_SYSTEM_PROMPT = `You are an expert barista and espresso recipe engineer for the Meticulous home espresso machine.
-
-The machine uses a JSON "profile" to precisely control every aspect of extraction. You must generate or modify profiles that follow the EXACT schema below.
-
-## Required JSON Structure (every field matters)
-
-\`\`\`json
-{
-  "version": 1,
-  "name": "Ethiopia Natural Bloom",
-  "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "author": "AI Generated",
-  "author_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "temperature": 94,
-  "final_weight": 36,
-  "previous_authors": [],
-  "variables": [],
-  "stages": [
-    {
-      "name": "Preinfusion",
-      "key": "preinfusion",
-      "type": "flow",
-      "dynamics": {
-        "points": [[0, 2.0], [8, 2.0]],
-        "over": "time",
-        "interpolation": "linear"
-      },
-      "exit_triggers": [
-        {
-          "type": "time",
-          "value": 8,
-          "relative": false,
-          "comparison": ">="
-        }
-      ],
-      "limits": [
-        { "type": "pressure", "value": 3.0 }
-      ]
-    },
-    {
-      "name": "Ramp",
-      "key": "ramp",
-      "type": "pressure",
-      "dynamics": {
-        "points": [[0, 2.0], [10, 9.0]],
-        "over": "time",
-        "interpolation": "curve"
-      },
-      "exit_triggers": [
-        { "type": "time", "value": 10, "relative": false, "comparison": ">=" }
-      ]
-    },
-    {
-      "name": "Extraction",
-      "key": "extraction",
-      "type": "pressure",
-      "dynamics": {
-        "points": [[0, 9.0], [30, 8.0]],
-        "over": "time",
-        "interpolation": "linear"
-      },
-      "exit_triggers": [
-        { "type": "weight", "value": 36, "relative": false, "comparison": ">=" }
-      ],
-      "limits": [
-        { "type": "flow", "value": 4.0 }
-      ]
-    }
-  ]
-}
-\`\`\`
-
-## STRICT Field Rules
-
-**Top-level:**
-- \`version\`: Always the number 1
-- \`name\`: Human-readable descriptive name (string, required)
-- \`id\`: A fresh UUID v4 — format "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx" (required)
-- \`author\`: "AI Generated" unless user specifies (string, required)
-- \`author_id\`: A fresh UUID v4 (required)
-- \`temperature\`: Number in Celsius — 88-92 for dark roasts, 93-96 for light/medium (required)
-- \`final_weight\`: Target yield in grams — typically dose × 2, common range 28-42 (required)
-- \`previous_authors\`: Always an empty array \`[]\` (required)
-- \`variables\`: Always an empty array \`[]\` (required)
-- \`stages\`: Non-empty array of stage objects (required)
-
-**Each Stage:**
-- \`name\`: Descriptive name like "Preinfusion", "Bloom", "Ramp", "Extraction", "Decline"
-- \`key\`: Lowercase slug matching the name — "preinfusion", "bloom", "ramp", "extraction", "decline"
-- \`type\`: Either \`"flow"\` (ml/s control) or \`"pressure"\` (bar control)
-- \`dynamics.points\`: Array of [time_seconds, value] pairs. MUST start at [0, value]. Flow 0-10 ml/s, Pressure 0-12 bar
-- \`dynamics.over\`: Always \`"time"\`
-- \`dynamics.interpolation\`: \`"linear"\` for straight lines, \`"curve"\` for smooth curves
-- \`exit_triggers\`: Non-empty array. LAST stage MUST exit on \`"weight"\` = \`final_weight\`
-- \`limits\` (optional): Safety caps — pressure limit on flow stages, flow limit on pressure stages
-
-**Exit Triggers:**
-- \`type\`: \`"time"\`, \`"weight"\`, \`"pressure"\`, or \`"flow"\`
-- \`value\`: Numeric threshold
-- \`relative\`: Always \`false\`
-- \`comparison\`: Usually \`">="\` (exit when value reaches threshold)
-
-## Design Principles
-
-| Coffee | Temperature | Approach |
-|--------|------------|---------|
-| Light roast, washed | 94-96°C | Gentle bloom, slower extraction, flow control |
-| Light roast, natural | 93-95°C | Extended preinfusion, declining pressure |
-| Medium roast | 92-94°C | Classic preinfusion + pressure ramp |
-| Dark roast | 88-92°C | Low temperature, avoid over-extraction |
-| Espresso blend | 91-93°C | Classic Italian: fast ramp to 9 bar |
-
-## Common Profiles
-
-**Classic Italian:** Preinfusion (flow, 8s) → Ramp to 9 bar (10s) → Hold at 9 bar until weight
-**Turbo:** Short preinfusion → Immediate 9 bar → High flow cap → Exit on weight fast
-**Blooming:** Extended low-flow bloom (30-45s, very low pressure) → Ramp → Declining extraction
-**Ristretto:** Lower final_weight, longer preinfusion, higher temperature
-
-RETURN ONLY VALID JSON. No markdown. No code fences. No explanation. Just the JSON object.`;
 
 // ============================================================
 // RECIPE VALIDATION & REPAIR
@@ -189,9 +90,7 @@ function validateProfile(profile: Record<string, unknown>): {
   if (typeof profile.temperature !== "number" || profile.temperature <= 0)
     errors.push("Missing or invalid 'temperature' (must be a positive number)");
   if (typeof profile.final_weight !== "number" || profile.final_weight <= 0)
-    errors.push(
-      "Missing or invalid 'final_weight' (must be a positive number)"
-    );
+    errors.push("Missing or invalid 'final_weight' (must be a positive number)");
 
   if (!Array.isArray(profile.stages) || (profile.stages as unknown[]).length === 0) {
     errors.push("'stages' must be a non-empty array");
@@ -218,16 +117,14 @@ function validateProfile(profile: Record<string, unknown>): {
     const triggers = lastStage?.exit_triggers as Record<string, unknown>[] | undefined;
     const hasWeightExit = triggers?.some((t) => t.type === "weight");
     if (!hasWeightExit)
-      errors.push(
-        "Last stage must have an exit_trigger of type 'weight' equal to final_weight"
-      );
+      errors.push("Last stage must have an exit_trigger of type 'weight' equal to final_weight");
   }
 
   return { valid: errors.length === 0, errors };
 }
 
+// Fills in structurally missing fields that don't require human judgment
 function repairProfile(profile: Record<string, unknown>): Record<string, unknown> {
-  // Auto-fill missing top-level fields
   if (!profile.id) profile.id = randomUUID();
   if (!profile.author_id) profile.author_id = randomUUID();
   if (!profile.author) profile.author = "AI Generated";
@@ -237,56 +134,17 @@ function repairProfile(profile: Record<string, unknown>): Record<string, unknown
   return profile;
 }
 
-// Call Claude for recipe generation or tailoring
-async function callClaudeForRecipe(userPrompt: string): Promise<Record<string, unknown>> {
-  const response = await anthropic.messages.create({
-    model: "claude-opus-4-6",
-    max_tokens: 4096,
-    thinking: { type: "adaptive" },
-    system: RECIPE_SYSTEM_PROMPT,
-    messages: [{ role: "user", content: userPrompt }],
-  });
-
-  const text =
-    response.content.find((b) => b.type === "text")?.text ?? "";
-
-  // Extract JSON object from response
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error(
-      `Claude did not return valid JSON. Response was:\n${text.slice(0, 500)}`
-    );
-  }
-
-  let recipe: Record<string, unknown>;
-  try {
-    recipe = JSON.parse(jsonMatch[0]);
-  } catch (e) {
-    throw new Error(`Failed to parse JSON from Claude's response: ${e}`);
-  }
-
-  // Auto-repair common omissions
-  recipe = repairProfile(recipe);
-
-  const validation = validateProfile(recipe);
-  if (!validation.valid) {
-    throw new Error(
-      `Generated recipe has schema errors:\n${validation.errors.join("\n")}`
-    );
-  }
-
-  return recipe;
-}
-
 // ============================================================
 // MCP SERVER
 // ============================================================
+
+const PROFILE_SCHEMA_HINT = `Profile JSON must include: name (string), id (UUID v4), author (string), author_id (UUID v4), temperature (number, Celsius), final_weight (number, yield grams), previous_authors ([]), variables ([]), version (1), stages (array). Each stage needs: name, key, type ("flow"|"pressure"), dynamics.points ([[time,value],...] starting at [0,x]), dynamics.over ("time"), dynamics.interpolation ("linear"|"curve"), exit_triggers (array). Last stage must exit on {type:"weight", value:<final_weight>}.`;
 
 const server = new McpServer({
   name: "meticulous-espresso",
   version: "1.0.0",
   description:
-    "Control your Meticulous espresso machine: generate recipes, browse shot history, tailor profiles with natural language, and manage your collection.",
+    "Control your Meticulous espresso machine: manage recipes, browse shot history, and control the machine. Generate and modify recipes by asking Claude — then use save_profile or load_profile to push them to the machine.",
 });
 
 // ============================================================
@@ -344,9 +202,7 @@ server.tool(
     setting_name: z
       .string()
       .optional()
-      .describe(
-        "Optional: specific setting key to retrieve (e.g. 'auto_preheat', 'enable_sounds')"
-      ),
+      .describe("Optional: specific setting key to retrieve (e.g. 'auto_preheat', 'enable_sounds')"),
   },
   async ({ setting_name }) => {
     const api = getApi();
@@ -363,9 +219,7 @@ server.tool(
   {
     settings: z
       .record(z.unknown())
-      .describe(
-        "Partial settings object, e.g. { \"enable_sounds\": true, \"auto_preheat\": 1 }"
-      ),
+      .describe("Partial settings object, e.g. { \"enable_sounds\": true, \"auto_preheat\": 1 }"),
   },
   async ({ settings }) => {
     const api = getApi();
@@ -436,7 +290,7 @@ server.tool(
 
 server.tool(
   "get_default_profiles",
-  "Get the built-in factory profiles and community profiles that ship with the machine. Good starting points for recipe creation.",
+  "Get the built-in factory profiles and community profiles that ship with the machine. Good starting points for recipe creation or modification.",
   {},
   async () => {
     const api = getApi();
@@ -449,14 +303,13 @@ server.tool(
 
 server.tool(
   "load_profile",
-  "Load a profile JSON onto the machine as the active recipe (temporary — use save_profile to persist). The machine will use this recipe for the next shot.",
+  `Load a profile JSON onto the machine as the active recipe (temporary — use save_profile to persist). Validates the schema before sending. ${PROFILE_SCHEMA_HINT}`,
   {
     profile: z
       .record(z.unknown())
       .describe("Full profile JSON object to load onto the machine"),
   },
   async ({ profile }) => {
-    // Validate before sending to avoid cryptic machine errors
     const repaired = repairProfile(profile as Record<string, unknown>);
     const validation = validateProfile(repaired);
     if (!validation.valid) {
@@ -464,7 +317,7 @@ server.tool(
         content: [
           {
             type: "text",
-            text: `Cannot load profile — schema validation failed:\n${validation.errors.join("\n")}\n\nUse validate_recipe to auto-fix, or generate_recipe to create a fresh one.`,
+            text: `Cannot load profile — schema validation failed:\n${validation.errors.join("\n")}\n\nUse validate_recipe to check and repair the profile first.`,
           },
         ],
       };
@@ -495,7 +348,7 @@ server.tool(
 
 server.tool(
   "save_profile",
-  "Permanently save a profile to the machine's internal storage. This persists the recipe across reboots.",
+  `Permanently save a profile to the machine's internal storage. Validates the schema before saving. ${PROFILE_SCHEMA_HINT}`,
   {
     profile: z
       .record(z.unknown())
@@ -544,13 +397,12 @@ server.tool(
 
 server.tool(
   "get_shot_history",
-  "Get a short listing of past espresso shots (metadata only, no raw sensor data). Shows shot name, time, profile used, and rating.",
+  "Get a listing of past espresso shots (metadata only). Shows shot name, time, profile used, and rating.",
   {},
   async () => {
     const api = getApi();
     const res = await api.getHistoryShortListing();
     const history = res.data.history;
-    // Return a clean summary
     const summary = history.map((h) => ({
       db_key: h.db_key,
       id: h.id,
@@ -570,39 +422,17 @@ server.tool(
   "search_history",
   "Search shot history with flexible filters. All parameters are optional.",
   {
-    query: z
-      .string()
-      .optional()
-      .describe("Text search query (searches profile name)"),
-    start_date: z
-      .string()
-      .optional()
-      .describe("ISO date string for start of range, e.g. '2025-01-01'"),
-    end_date: z
-      .string()
-      .optional()
-      .describe("ISO date string for end of range, e.g. '2025-12-31'"),
-    order_by: z
-      .array(z.enum(["profile", "date"]))
-      .optional()
-      .describe("Sort fields"),
-    sort: z
-      .enum(["asc", "desc"])
-      .optional()
-      .default("desc")
-      .describe("Sort direction"),
-    max_results: z
-      .number()
-      .optional()
-      .default(20)
-      .describe("Maximum number of results to return"),
+    query: z.string().optional().describe("Text search query (searches profile name)"),
+    start_date: z.string().optional().describe("ISO date string for start of range, e.g. '2025-01-01'"),
+    end_date: z.string().optional().describe("ISO date string for end of range, e.g. '2025-12-31'"),
+    order_by: z.array(z.enum(["profile", "date"])).optional().describe("Sort fields"),
+    sort: z.enum(["asc", "desc"]).optional().default("desc").describe("Sort direction"),
+    max_results: z.number().optional().default(20).describe("Maximum number of results to return"),
     include_data: z
       .boolean()
       .optional()
       .default(false)
-      .describe(
-        "Include full sensor data arrays (pressure, flow, weight per time). Warning: large response."
-      ),
+      .describe("Include full sensor data arrays (pressure, flow, weight per time). Warning: large response."),
   },
   async ({ query, start_date, end_date, order_by, sort, max_results, include_data }) => {
     const api = getApi();
@@ -632,9 +462,7 @@ server.tool(
     const res = await api.getCurrentShot();
     if (!res.data) {
       return {
-        content: [
-          { type: "text", text: "No shot currently in progress. Machine is idle." },
-        ],
+        content: [{ type: "text", text: "No shot currently in progress. Machine is idle." }],
       };
     }
     return {
@@ -684,9 +512,7 @@ server.tool(
     rating: z
       .enum(["like", "dislike"])
       .nullable()
-      .describe(
-        "'like', 'dislike', or null to remove an existing rating"
-      ),
+      .describe("'like', 'dislike', or null to remove an existing rating"),
   },
   async ({ shot_db_key, rating }) => {
     const api = getApi();
@@ -701,9 +527,7 @@ server.tool(
   "search_historical_profiles",
   "Search for historical versions of profiles by name. Useful for finding old recipe iterations.",
   {
-    query: z
-      .string()
-      .describe("Profile name or partial name to search for"),
+    query: z.string().describe("Profile name or partial name to search for"),
   },
   async ({ query }) => {
     const api = getApi();
@@ -715,124 +539,19 @@ server.tool(
 );
 
 // ============================================================
-// AI RECIPE TOOLS (Claude-powered)
+// RECIPE TOOLS
 // ============================================================
 
 server.tool(
-  "generate_recipe",
-  "Generate a new espresso recipe from a natural language description using Claude. Describe the coffee, desired flavor profile, brew ratio, or technique. Returns a complete, validated profile JSON ready to load onto the machine.",
-  {
-    description: z
-      .string()
-      .describe(
-        "Natural language description of what you want. Examples: 'A washed Ethiopian light roast emphasizing florals and acidity, 1:2.5 ratio', 'Classic Italian espresso with a thick crema, 18g in 36g out', 'A gentle blooming profile for a natural Yirgacheffe', 'Turbo shot for a dark blend in under 25 seconds'"
-      ),
-    dose_grams: z
-      .number()
-      .optional()
-      .describe("Coffee dose in grams (e.g. 18). Used to calculate yield if not specified in description."),
-    yield_grams: z
-      .number()
-      .optional()
-      .describe("Target espresso yield in grams (overrides ratio calculation)"),
-  },
-  async ({ description, dose_grams, yield_grams }) => {
-    let prompt = description;
-    if (dose_grams) prompt += `\n\nDose: ${dose_grams}g`;
-    if (yield_grams) prompt += `\nTarget yield: ${yield_grams}g`;
-
-    try {
-      const recipe = await callClaudeForRecipe(prompt);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Generated recipe: "${recipe.name}"\n\n${JSON.stringify(recipe, null, 2)}\n\nUse load_profile to activate this recipe on the machine, or save_profile to store it permanently.`,
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to generate recipe: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
-      };
-    }
-  }
-);
-
-server.tool(
-  "tailor_recipe",
-  "Modify an existing espresso recipe based on natural language feedback. Describe what you want to change — flavor notes, extraction time, pressure curve, temperature, etc. Returns the updated recipe JSON.",
-  {
-    recipe: z
-      .record(z.unknown())
-      .describe("The current profile JSON to modify"),
-    feedback: z
-      .string()
-      .describe(
-        "What to change and why. Examples: 'The espresso tastes too bitter, reduce temperature by 2 degrees and shorten extraction', 'Add a longer bloom phase before the ramp', 'The shot is channeling, reduce the preinfusion flow to 1.5 ml/s', 'Make it sweeter — use a declining pressure curve in the extraction stage', 'Increase yield to 40g'"
-      ),
-  },
-  async ({ recipe, feedback }) => {
-    const currentRecipeStr = JSON.stringify(recipe, null, 2);
-    const prompt = `Here is the current recipe:
-
-\`\`\`json
-${currentRecipeStr}
-\`\`\`
-
-Apply this change request and return the complete updated recipe:
-
-${feedback}
-
-Important:
-- Keep all unchanged fields exactly as they are
-- Generate a new UUID for the 'id' field since this is a modified version
-- Update the 'name' to reflect the change if appropriate
-- Ensure the last stage still exits on weight = final_weight
-- Return ONLY the complete JSON, nothing else`;
-
-    try {
-      const updatedRecipe = await callClaudeForRecipe(prompt);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Updated recipe: "${updatedRecipe.name}"\n\nChanges applied: ${feedback}\n\n${JSON.stringify(updatedRecipe, null, 2)}`,
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Failed to tailor recipe: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
-      };
-    }
-  }
-);
-
-server.tool(
   "validate_recipe",
-  "Validate a recipe JSON against the Meticulous profile schema. Returns a list of errors if invalid, or confirms the recipe is ready to load. If auto_fix is true, attempts to repair common issues using Claude.",
+  "Validate a recipe JSON against the Meticulous profile schema. Returns a list of errors if invalid. If auto_fix is true, automatically fills in simple missing fields (id, author_id, version, previous_authors, variables) — structural errors like missing stages must be corrected manually.",
   {
-    recipe: z
-      .record(z.unknown())
-      .describe("The profile JSON to validate"),
+    recipe: z.record(z.unknown()).describe("The profile JSON to validate"),
     auto_fix: z
       .boolean()
       .optional()
       .default(false)
-      .describe(
-        "If true, use Claude to repair schema errors and return a fixed version"
-      ),
+      .describe("If true, auto-fills simple missing fields and returns the repaired profile"),
   },
   async ({ recipe, auto_fix }) => {
     const repaired = repairProfile(recipe as Record<string, unknown>);
@@ -856,78 +575,47 @@ server.tool(
         content: [
           {
             type: "text",
-            text: `❌ Recipe has ${validation.errors.length} schema error(s):\n\n${errorList}\n\nRun again with auto_fix: true to attempt automatic repair.`,
+            text: `❌ Recipe has ${validation.errors.length} schema error(s):\n\n${errorList}\n\nRun again with auto_fix: true to repair simple issues, or correct structural errors manually.`,
           },
         ],
       };
     }
 
-    // Auto-fix with Claude
-    const prompt = `This espresso profile JSON has schema validation errors. Fix ALL errors and return a corrected, complete profile.
-
-Current JSON:
-\`\`\`json
-${JSON.stringify(recipe, null, 2)}
-\`\`\`
-
-Errors to fix:
-${errorList}
-
-Rules:
-- Preserve all existing correct data
-- Only change what's needed to fix the errors
-- Generate new UUIDs for any missing id/author_id fields
-- Ensure every stage has exit_triggers
-- Ensure the last stage exits on weight
-- Return ONLY valid JSON, nothing else`;
-
-    try {
-      const fixedRecipe = await callClaudeForRecipe(prompt);
+    // Re-validate after repair to see if auto-fix resolved everything
+    const revalidation = validateProfile(repaired);
+    if (revalidation.valid) {
       return {
         content: [
           {
             type: "text",
-            text: `Fixed recipe "${fixedRecipe.name}"\n\nErrors that were fixed:\n${errorList}\n\n${JSON.stringify(fixedRecipe, null, 2)}`,
-          },
-        ],
-      };
-    } catch (err) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Auto-fix failed: ${err instanceof Error ? err.message : String(err)}\n\nOriginal errors:\n${errorList}`,
+            text: `✅ Recipe repaired and valid: "${repaired.name}"\n\n${JSON.stringify(repaired, null, 2)}`,
           },
         ],
       };
     }
+
+    const remaining = revalidation.errors.map((e) => `• ${e}`).join("\n");
+    return {
+      content: [
+        {
+          type: "text",
+          text: `⚠️ Auto-fix applied simple repairs, but ${revalidation.errors.length} error(s) remain that need manual correction:\n\n${remaining}\n\nPartially repaired profile:\n${JSON.stringify(repaired, null, 2)}`,
+        },
+      ],
+    };
   }
 );
 
 server.tool(
-  "analyze_shot_and_suggest",
-  "Analyze the data from a past shot and suggest recipe adjustments to improve the next extraction. Provide tasting notes or observations and get concrete recipe modifications.",
+  "get_shot_data_for_analysis",
+  "Fetch full shot data and its associated profile for analysis. Returns sensor curves (pressure, flow, weight over time), shot metadata, and the recipe used. Pair this with tasting notes to diagnose extraction issues and suggest recipe changes.",
   {
     shot_db_key: z
       .number()
       .optional()
-      .describe(
-        "db_key of the shot to analyze (from get_shot_history). If omitted, the last shot is analyzed."
-      ),
-    tasting_notes: z
-      .string()
-      .optional()
-      .describe(
-        "Your tasting notes or observations. Examples: 'Too bitter and astringent', 'Sour and thin, weak body', 'Great but needed more sweetness', 'Channeled halfway through'"
-      ),
-    observations: z
-      .string()
-      .optional()
-      .describe(
-        "Machine observations. Examples: 'Pressure spike at 15s', 'Flow dropped at end', 'Weight target hit at 22s which is too fast'"
-      ),
+      .describe("db_key of the shot to fetch (from get_shot_history). If omitted, fetches the last shot."),
   },
-  async ({ shot_db_key, tasting_notes, observations }) => {
+  async ({ shot_db_key }) => {
     const api = getApi();
 
     let shotData;
@@ -945,59 +633,8 @@ server.tool(
       };
     }
 
-    // Build summary of shot data for Claude (avoid sending full point array)
-    const dataPoints = (shotData as Record<string, unknown> & { data?: unknown[] }).data;
-    const shotSummary = {
-      name: shotData.name,
-      profile: (shotData as Record<string, unknown> & { profile?: { name: string; temperature: number; final_weight: number; stages: unknown[] } }).profile ? {
-        name: (shotData as Record<string, unknown> & { profile: { name: string; temperature: number; final_weight: number; stages: unknown[] } }).profile.name,
-        temperature: (shotData as Record<string, unknown> & { profile: { name: string; temperature: number; final_weight: number; stages: unknown[] } }).profile.temperature,
-        final_weight: (shotData as Record<string, unknown> & { profile: { name: string; temperature: number; final_weight: number; stages: unknown[] } }).profile.final_weight,
-        stages: (shotData as Record<string, unknown> & { profile: { name: string; temperature: number; final_weight: number; stages: unknown[] } }).profile.stages,
-      } : null,
-      total_data_points: Array.isArray(dataPoints) ? dataPoints.length : 0,
-      // Sample key data points (start, middle, end)
-      data_samples: Array.isArray(dataPoints) && dataPoints.length > 0
-        ? [
-            dataPoints[0],
-            dataPoints[Math.floor(dataPoints.length / 4)],
-            dataPoints[Math.floor(dataPoints.length / 2)],
-            dataPoints[Math.floor((dataPoints.length * 3) / 4)],
-            dataPoints[dataPoints.length - 1],
-          ]
-        : [],
-    };
-
-    const analysisPrompt = `Analyze this espresso shot and suggest specific recipe modifications.
-
-Shot data summary:
-\`\`\`json
-${JSON.stringify(shotSummary, null, 2)}
-\`\`\`
-
-${tasting_notes ? `Tasting notes: ${tasting_notes}` : ""}
-${observations ? `Machine observations: ${observations}` : ""}
-
-Based on the shot data and feedback, provide:
-1. A diagnosis of what went wrong or what could be improved
-2. 3-5 specific, actionable recipe changes (temperature, pressure curves, preinfusion time, etc.)
-3. If a profile is available above, output a complete modified profile JSON with your suggested changes applied
-
-Be specific and technical. Reference actual values (e.g., "reduce temperature from 94°C to 92°C", "extend preinfusion from 8s to 12s at 1.5 ml/s").
-
-If outputting a modified profile, put it in a JSON code block.`;
-
-    const response = await anthropic.messages.create({
-      model: "claude-opus-4-6",
-      max_tokens: 4096,
-      thinking: { type: "adaptive" },
-      system: `You are an expert espresso technician and barista with deep knowledge of extraction theory and the Meticulous machine's profile system. Give precise, actionable advice. ${RECIPE_SYSTEM_PROMPT}`,
-      messages: [{ role: "user", content: analysisPrompt }],
-    });
-
-    const text = response.content.find((b) => b.type === "text")?.text ?? "";
     return {
-      content: [{ type: "text", text }],
+      content: [{ type: "text", text: JSON.stringify(shotData, null, 2) }],
     };
   }
 );
@@ -1008,7 +645,7 @@ If outputting a modified profile, put it in a JSON code block.`;
 
 server.tool(
   "get_notifications",
-  "Get machine notifications. Notifications may include firmware update alerts, maintenance reminders, or error messages.",
+  "Get machine notifications (firmware updates, maintenance reminders, error messages).",
   {
     acknowledged: z
       .boolean()
@@ -1032,7 +669,6 @@ server.tool(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  // Log to stderr (stdout is reserved for MCP protocol)
   console.error(`Meticulous MCP server started — connected to machine at ${BASE_URL}`);
 }
 
