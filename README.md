@@ -14,30 +14,45 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server that gives Cl
 
 ## Setup
 
-### 1. Clone and install
+You only need three things: the repo URL, your machine's local IP, and an Anthropic API key.
+
+### Environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `METICULOUS_IP` | **Yes** | Local IP of your Meticulous machine (find it in your router or the machine's settings) |
+| `ANTHROPIC_API_KEY` | Yes (for AI tools) | Get one at [console.anthropic.com](https://console.anthropic.com) |
+
+### Option A — Zero install (recommended)
+
+No cloning or building required. Add this to your `~/.claude/claude_code_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "meticulous": {
+      "command": "npx",
+      "args": ["-y", "github:YOUR_USERNAME/meticulous-mcp-server"],
+      "env": {
+        "METICULOUS_IP": "192.168.1.x",
+        "ANTHROPIC_API_KEY": "sk-ant-..."
+      }
+    }
+  }
+}
+```
+
+The first time Claude Code starts, `npx` will download the repo, run `npm install`, build it automatically, and launch the server. Subsequent starts are instant from cache.
+
+### Option B — Clone and build locally
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/meticulous-mcp-server.git
 cd meticulous-mcp-server
-npm install
+npm install   # also runs the build via the prepare script
 ```
 
-### 2. Build
-
-```bash
-npm run build
-```
-
-### 3. Environment variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `METICULOUS_IP` | **Yes** | IP address of your Meticulous machine on your local network |
-| `ANTHROPIC_API_KEY` | Yes (for AI tools) | Your Anthropic API key — get one at [console.anthropic.com](https://console.anthropic.com) |
-
-### 4. Add to Claude Code
-
-Add to your `~/.claude/claude_code_config.json` (or wherever your Claude Code MCP config lives):
+Then point Claude Code at the built file:
 
 ```json
 {
@@ -54,27 +69,7 @@ Add to your `~/.claude/claude_code_config.json` (or wherever your Claude Code MC
 }
 ```
 
-Or run directly from source during development (no build needed):
-
-```json
-{
-  "mcpServers": {
-    "meticulous": {
-      "command": "npx",
-      "args": [
-        "tsx",
-        "/absolute/path/to/meticulous-mcp-server/src/index.ts"
-      ],
-      "env": {
-        "METICULOUS_IP": "192.168.1.x",
-        "ANTHROPIC_API_KEY": "sk-ant-..."
-      }
-    }
-  }
-}
-```
-
-Then restart Claude Code. You should see the meticulous server in your MCP list.
+Restart Claude Code and you should see the meticulous server in your MCP list.
 
 ---
 
