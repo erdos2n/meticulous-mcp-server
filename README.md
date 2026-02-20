@@ -14,10 +14,11 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server that gives Cl
 
 ## Setup
 
-### 1. Install dependencies
+### 1. Clone and install
 
 ```bash
-cd mcp-server
+git clone https://github.com/YOUR_USERNAME/meticulous-mcp-server.git
+cd meticulous-mcp-server
 npm install
 ```
 
@@ -29,10 +30,10 @@ npm run build
 
 ### 3. Environment variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `METICULOUS_IP` | No | `192.168.5.251` | IP address of your machine |
-| `ANTHROPIC_API_KEY` | Yes (for AI tools) | — | Your Anthropic API key |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `METICULOUS_IP` | **Yes** | IP address of your Meticulous machine on your local network |
+| `ANTHROPIC_API_KEY` | Yes (for AI tools) | Your Anthropic API key — get one at [console.anthropic.com](https://console.anthropic.com) |
 
 ### 4. Add to Claude Code
 
@@ -43,17 +44,17 @@ Add to your `~/.claude/claude_code_config.json` (or wherever your Claude Code MC
   "mcpServers": {
     "meticulous": {
       "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/meticulous-app/mcp-server/dist/index.js"],
+      "args": ["/absolute/path/to/meticulous-mcp-server/dist/index.js"],
       "env": {
-        "METICULOUS_IP": "192.168.5.251",
-        "ANTHROPIC_API_KEY": "your-api-key-here"
+        "METICULOUS_IP": "192.168.1.x",
+        "ANTHROPIC_API_KEY": "sk-ant-..."
       }
     }
   }
 }
 ```
 
-Or using `ts-node` (no build step needed during development):
+Or run directly from source during development (no build needed):
 
 ```json
 {
@@ -61,12 +62,12 @@ Or using `ts-node` (no build step needed during development):
     "meticulous": {
       "command": "npx",
       "args": [
-        "ts-node",
-        "/ABSOLUTE/PATH/TO/meticulous-app/mcp-server/src/index.ts"
+        "tsx",
+        "/absolute/path/to/meticulous-mcp-server/src/index.ts"
       ],
       "env": {
-        "METICULOUS_IP": "192.168.5.251",
-        "ANTHROPIC_API_KEY": "your-api-key-here"
+        "METICULOUS_IP": "192.168.1.x",
+        "ANTHROPIC_API_KEY": "sk-ant-..."
       }
     }
   }
@@ -170,16 +171,11 @@ The AI tools enforce this schema automatically and validate before loading to th
 ## Project Structure
 
 ```
-meticulous-app/
-├── app/
-│   ├── backend/      # Express API (existing)
-│   ├── frontend/     # React UI (existing)
-│   └── llm-service/  # Ollama service (existing)
-├── mcp-server/       # ← This MCP server
-│   ├── src/
-│   │   └── index.ts  # All MCP tools
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── README.md
-└── data/             # Saved recipe JSONs
+meticulous-mcp-server/
+├── src/
+│   └── index.ts      # All 20 MCP tools
+├── dist/             # Compiled output (after npm run build)
+├── package.json
+├── tsconfig.json
+└── README.md
 ```

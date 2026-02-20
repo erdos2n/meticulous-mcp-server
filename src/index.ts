@@ -6,7 +6,7 @@
  * machine control, and AI-powered recipe tailoring.
  *
  * Environment variables:
- *   METICULOUS_IP      - IP of your Meticulous machine (default: 192.168.5.251)
+ *   METICULOUS_IP      - IP of your Meticulous machine on your local network (required)
  *   ANTHROPIC_API_KEY  - Your Anthropic API key (for recipe generation/tailoring)
  */
 
@@ -21,10 +21,15 @@ import { randomUUID } from "crypto";
 // CONFIG & CLIENTS
 // ============================================================
 
-const MACHINE_IP =
-  process.env.METICULOUS_IP ||
-  process.env.MACHINE_IP ||
-  "192.168.5.251";
+const MACHINE_IP = process.env.METICULOUS_IP || process.env.MACHINE_IP;
+if (!MACHINE_IP) {
+  console.error(
+    "Error: METICULOUS_IP environment variable is required.\n" +
+    "Set it to your machine's local IP address, e.g.:\n" +
+    "  export METICULOUS_IP=192.168.1.x"
+  );
+  process.exit(1);
+}
 
 const BASE_URL = MACHINE_IP.startsWith("http")
   ? MACHINE_IP
