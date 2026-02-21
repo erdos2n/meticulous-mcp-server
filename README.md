@@ -16,7 +16,7 @@ No Anthropic API key required — Claude handles all the AI reasoning. This serv
 
 ## Setup
 
-You only need two things: your machine's local IP and a repo URL.
+You only need your machine's local IP and one MCP server config entry.
 
 ### Environment variables
 
@@ -24,13 +24,9 @@ You only need two things: your machine's local IP and a repo URL.
 |----------|----------|-------------|
 | `METICULOUS_IP` | **Yes** | Local IP of your Meticulous machine (find it in your router or the machine's settings) |
 
-### Option A — Zero install (recommended)
+### Recommended (easy sharing) — Auto install with `npx`
 
-No cloning or building required. Add this to your Claude config:
-
-**Claude Desktop** — `~/Library/Application Support/Claude/claude_desktop_config.json`
-
-**Claude Code** — `~/.claude/claude_code_config.json`
+Use this when sharing with others so they only add config and Claude installs/launches automatically.
 
 ```json
 {
@@ -46,17 +42,26 @@ No cloning or building required. Add this to your Claude config:
 }
 ```
 
-The first time Claude starts, `npx` will download the repo, run `npm install`, build it automatically, and launch the server. Subsequent starts are instant from cache.
+If published to npm, replace args with:
 
-### Option B — Clone and build locally
+```json
+["-y", "meticulous-mcp-server"]
+```
+
+### Option A — Local repo (current development)
+
+If you have the repo cloned locally, first install and build:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/meticulous-mcp-server.git
-cd meticulous-mcp-server
+cd /path/to/meticulous-mcp-server
 npm install   # also runs the build via the prepare script
 ```
 
-Then point Claude at the built file:
+Then add to your Claude config:
+
+**Claude Desktop** — `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+**Claude Code** — `~/.claude/claude_code_config.json`
 
 ```json
 {
@@ -72,7 +77,117 @@ Then point Claude at the built file:
 }
 ```
 
+Or skip the build step entirely using `tsx` (runs TypeScript directly):
+
+```json
+{
+  "mcpServers": {
+    "meticulous": {
+      "command": "npx",
+      "args": ["tsx", "/absolute/path/to/meticulous-mcp-server/src/index.ts"],
+      "env": {
+        "METICULOUS_IP": "192.168.1.x"
+      }
+    }
+  }
+}
+```
+
+### Option B — Local repo via `npx` (no explicit build command)
+
+This still runs locally, but through `npx`:
+
+```json
+{
+  "mcpServers": {
+    "meticulous": {
+      "command": "npx",
+      "args": ["-y", "/absolute/path/to/meticulous-mcp-server"],
+      "env": {
+        "METICULOUS_IP": "192.168.1.x"
+      }
+    }
+  }
+}
+```
+
+### Option C — Zero install via GitHub
+
+No cloning or manual build required:
+
+```json
+{
+  "mcpServers": {
+    "meticulous": {
+      "command": "npx",
+      "args": ["-y", "github:YOUR_USERNAME/meticulous-mcp-server"],
+      "env": {
+        "METICULOUS_IP": "192.168.1.x"
+      }
+    }
+  }
+}
+```
+
+The first time Claude starts, `npx` will download the repo, build it automatically, and launch the server. Subsequent starts are instant from cache.
+
 Restart Claude and you should see the meticulous server in your MCP list.
+
+---
+
+## npm Release Checklist
+
+Use this when you're ready to move from local/GitHub usage to `npx -y meticulous-mcp-server` for everyone.
+
+1. Verify your npm account and login:
+
+```bash
+npm whoami
+```
+
+2. Build and sanity check locally:
+
+```bash
+npm ci
+npm run build
+METICULOUS_IP=192.168.1.x node dist/index.js
+```
+
+3. Bump version:
+
+```bash
+npm version patch
+```
+
+4. Publish package:
+
+```bash
+npm publish --access public
+```
+
+5. Smoke test exactly how users will run it:
+
+```bash
+METICULOUS_IP=192.168.1.x npx -y meticulous-mcp-server
+```
+
+6. Share this Claude MCP config with users:
+
+```json
+{
+  "mcpServers": {
+    "meticulous": {
+      "command": "npx",
+      "args": ["-y", "meticulous-mcp-server"],
+      "env": {
+        "METICULOUS_IP": "192.168.1.x"
+      }
+    }
+  }
+}
+```
+
+If users already added a previous server definition, remove/re-add it so Claude picks up the new command.
 
 ---
 
@@ -113,6 +228,21 @@ Restart Claude and you should see the meticulous server in your MCP list.
 | `get_shot_statistics` | Total shots, breakdown by profile |
 | `rate_shot` | Mark a shot as like / dislike / null |
 | `search_historical_profiles` | Find past versions of a profile |
+
+### Shot output size controls
+
+To avoid blowing up chat context windows, shot tools now default to compact responses:
+
+- `get_last_shot` → `verbosity: "summary"` by default
+- `get_current_shot` → `verbosity: "summary"` by default
+- `get_shot_data_for_analysis` → `verbosity: "compact"` by default
+
+Use these options when needed:
+
+- `verbosity: "summary"` → key metadata only
+- `verbosity: "compact"` → metadata + sampled trace preview
+- `verbosity: "full"` → full raw payload (large)
+- `max_points` → cap trace preview size for compact/summary outputs
 
 ### Recipe Tools
 

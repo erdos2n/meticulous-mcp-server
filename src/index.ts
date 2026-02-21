@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 /**
  * Meticulous Espresso MCP Server
  *
@@ -12,11 +14,14 @@
  *   METICULOUS_IP  - IP of your Meticulous machine on your local network (required)
  */
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import Api from "@meticulous-home/espresso-api";
 import { randomUUID } from "crypto";
+
+type ApiConstructor = new (options?: unknown, base_url?: string) => any;
+const ApiClient = (Api as unknown as { default?: ApiConstructor }).default ?? (Api as unknown as ApiConstructor);
 
 // ============================================================
 // CONFIG & CLIENTS
@@ -37,7 +42,7 @@ const BASE_URL = MACHINE_IP.startsWith("http")
   : `http://${MACHINE_IP}`;
 
 // Fresh Api instance per call — avoids stale socket state
-const getApi = () => new Api(undefined, BASE_URL);
+const getApi = () => new ApiClient(undefined, BASE_URL);
 
 // ============================================================
 // RECIPE SCHEMA REFERENCE
@@ -132,6 +137,86 @@ function repairProfile(profile: Record<string, unknown>): Record<string, unknown
   if (!Array.isArray(profile.variables)) profile.variables = [];
   if (profile.version === undefined) profile.version = 1;
   return profile;
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function downsample<T>(items: T[], maxPoints: number): T[] {
+  if (maxPoints <= 0 || items.length <= maxPoints) return items;
+  if (maxPoints === 1) return [items[items.length - 1]];
+
+  const sampled: T[] = [];
+  const step = (items.length - 1) / (maxPoints - 1);
+  for (let i = 0; i < maxPoints; i++) {
+    sampled.push(items[Math.round(i * step)]);
+  }
+  return sampled;
+}
+
+function buildShotSummary(
+  shotData: Record<string, unknown>,
+  options?: { includeTrace?: boolean; maxTracePoints?: number }
+): Record<string, unknown> {
+  const includeTrace = options?.includeTrace ?? true;
+  const maxTracePoints = options?.maxTracePoints ?? 80;
+
+  const rows = Array.isArray(shotData.data) ? (shotData.data as Record<string, unknown>[]) : [];
+  const firstRow = rows[0] ?? {};
+  const lastRow = rows.at(-1) ?? {};
+  const firstShot = (firstRow.shot ?? {}) as Record<string, unknown>;
+  const lastShot = (lastRow.shot ?? {}) as Record<string, unknown>;
+  const profile = (shotData.profile ?? {}) as Record<string, unknown>;
+
+  const summary: Record<string, unknown> = {
+    id: shotData.id ?? null,
+    db_key: shotData.db_key ?? null,
+    name: shotData.name ?? null,
+    time: shotData.time ?? null,
+    time_iso:
+      typeof shotData.time === "number" ? new Date((shotData.time as number) * 1000).toISOString() : null,
+    file: shotData.file ?? null,
+    rating: shotData.rating ?? null,
+    profile: {
+      id: profile.id ?? null,
+      name: profile.name ?? null,
+      temperature: profile.temperature ?? null,
+      final_weight: profile.final_weight ?? null,
+      stage_count: Array.isArray(profile.stages) ? profile.stages.length : 0,
+    },
+    metrics: {
+      sample_count: rows.length,
+      duration_s: asNumber(lastRow.time),
+      profile_duration_s: asNumber(lastRow.profile_time),
+      final_status: (lastRow.status as string | undefined) ?? null,
+      start_pressure_bar: asNumber(firstShot.pressure),
+      start_flow_ml_s: asNumber(firstShot.flow),
+      start_weight_g: asNumber(firstShot.weight),
+      final_pressure_bar: asNumber(lastShot.pressure),
+      final_flow_ml_s: asNumber(lastShot.flow),
+      final_weight_g: asNumber(lastShot.weight),
+    },
+  };
+
+  if (includeTrace) {
+    const trace = rows.map((row) => {
+      const shot = (row.shot ?? {}) as Record<string, unknown>;
+      return {
+        time: asNumber(row.time),
+        profile_time: asNumber(row.profile_time),
+        pressure_bar: asNumber(shot.pressure),
+        flow_ml_s: asNumber(shot.flow),
+        weight_g: asNumber(shot.weight),
+      };
+    });
+
+    summary.trace_preview = downsample(trace, maxTracePoints);
+    summary.trace_points_returned = (summary.trace_preview as unknown[]).length;
+    summary.trace_points_total = rows.length;
+  }
+
+  return summary;
 }
 
 // ============================================================
@@ -455,9 +540,20 @@ server.tool(
 
 server.tool(
   "get_current_shot",
-  "Get real-time data for the shot currently being brewed (returns null if no shot in progress). Includes pressure, flow, weight, and temperature curves.",
-  {},
-  async () => {
+  "Get data for the shot currently being brewed (returns null if no shot is in progress). Defaults to a compact summary to avoid huge responses.",
+  {
+    verbosity: z
+      .enum(["summary", "full"])
+      .optional()
+      .default("summary")
+      .describe("'summary' (default) returns compact metadata and sampled trace; 'full' returns raw shot payload."),
+    max_points: z
+      .number()
+      .optional()
+      .default(40)
+      .describe("Maximum number of points in summary trace preview."),
+  },
+  async ({ verbosity, max_points }) => {
     const api = getApi();
     const res = await api.getCurrentShot();
     if (!res.data) {
@@ -465,17 +561,40 @@ server.tool(
         content: [{ type: "text", text: "No shot currently in progress. Machine is idle." }],
       };
     }
+
+    if (verbosity === "full") {
+      return {
+        content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }],
+      };
+    }
+
+    const summary = buildShotSummary(res.data as Record<string, unknown>, {
+      includeTrace: true,
+      maxTracePoints: max_points ?? 40,
+    });
+
     return {
-      content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(summary, null, 2) }],
     };
   }
 );
 
 server.tool(
   "get_last_shot",
-  "Get the data from the most recently completed shot. Includes full sensor curves (pressure, flow, weight over time) and the profile used.",
-  {},
-  async () => {
+  "Get the most recently completed shot. Defaults to a compact summary to avoid token overflow.",
+  {
+    verbosity: z
+      .enum(["summary", "full"])
+      .optional()
+      .default("summary")
+      .describe("'summary' (default) returns compact metadata and sampled trace; 'full' returns raw shot payload."),
+    max_points: z
+      .number()
+      .optional()
+      .default(80)
+      .describe("Maximum number of points in summary trace preview."),
+  },
+  async ({ verbosity, max_points }) => {
     const api = getApi();
     const res = await api.getLastShot();
     if (!res.data) {
@@ -483,8 +602,20 @@ server.tool(
         content: [{ type: "text", text: "No shots found in history." }],
       };
     }
+
+    if (verbosity === "full") {
+      return {
+        content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }],
+      };
+    }
+
+    const summary = buildShotSummary(res.data as Record<string, unknown>, {
+      includeTrace: true,
+      maxTracePoints: max_points ?? 80,
+    });
+
     return {
-      content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(summary, null, 2) }],
     };
   }
 );
@@ -608,14 +739,24 @@ server.tool(
 
 server.tool(
   "get_shot_data_for_analysis",
-  "Fetch full shot data and its associated profile for analysis. Returns sensor curves (pressure, flow, weight over time), shot metadata, and the recipe used. Pair this with tasting notes to diagnose extraction issues and suggest recipe changes.",
+  "Fetch shot data and profile for analysis. Defaults to compact output with a sampled trace to stay within chat context limits.",
   {
     shot_db_key: z
       .number()
       .optional()
       .describe("db_key of the shot to fetch (from get_shot_history). If omitted, fetches the last shot."),
+    verbosity: z
+      .enum(["summary", "compact", "full"])
+      .optional()
+      .default("compact")
+      .describe("'summary' returns key metadata only, 'compact' includes sampled trace, 'full' returns raw payload."),
+    max_points: z
+      .number()
+      .optional()
+      .default(120)
+      .describe("Maximum number of points in compact trace preview."),
   },
-  async ({ shot_db_key }) => {
+  async ({ shot_db_key, verbosity, max_points }) => {
     const api = getApi();
 
     let shotData;
@@ -633,8 +774,19 @@ server.tool(
       };
     }
 
+    if (verbosity === "full") {
+      return {
+        content: [{ type: "text", text: JSON.stringify(shotData, null, 2) }],
+      };
+    }
+
+    const summary = buildShotSummary(shotData as Record<string, unknown>, {
+      includeTrace: verbosity !== "summary",
+      maxTracePoints: max_points ?? 120,
+    });
+
     return {
-      content: [{ type: "text", text: JSON.stringify(shotData, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(summary, null, 2) }],
     };
   }
 );
