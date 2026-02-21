@@ -453,10 +453,20 @@ server.tool(
     }
 
     const api = getApi();
-    const res = await api.loadProfileFromJSON(repaired as Parameters<typeof api.loadProfileFromJSON>[0]);
-    return {
-      content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }],
-    };
+    try {
+      const res = await api.loadProfileFromJSON(repaired as Parameters<typeof api.loadProfileFromJSON>[0]);
+      return {
+        content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }],
+      };
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 409) {
+        return {
+          content: [{ type: "text", text: "Profile is already the active recipe on the machine — no change needed." }],
+        };
+      }
+      throw err;
+    }
   }
 );
 
@@ -468,10 +478,20 @@ server.tool(
   },
   async ({ profile_id }) => {
     const api = getApi();
-    const res = await api.loadProfileByID(profile_id);
-    return {
-      content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }],
-    };
+    try {
+      const res = await api.loadProfileByID(profile_id);
+      return {
+        content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }],
+      };
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 409) {
+        return {
+          content: [{ type: "text", text: `Profile ${profile_id} is already the active recipe on the machine — no change needed.` }],
+        };
+      }
+      throw err;
+    }
   }
 );
 
