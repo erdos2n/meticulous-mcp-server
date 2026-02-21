@@ -17,6 +17,9 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio";
 import { z } from "zod";
 import Api from "@meticulous-home/espresso-api";
 import { randomUUID } from "crypto";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
 
 // ============================================================
 // CONFIG & CLIENTS
@@ -659,6 +662,84 @@ server.tool(
     return {
       content: [{ type: "text", text: JSON.stringify(res.data, null, 2) }],
     };
+  }
+);
+
+// ============================================================
+// GRINDER CONTEXT
+// ============================================================
+
+const GRINDER_STORE_DIR = join(homedir(), ".meticulous-mcp");
+const GRINDER_STORE_PATH = join(GRINDER_STORE_DIR, "grinder.json");
+
+interface GrinderEntry {
+  grinder: string;
+  setting: number;
+  notes?: string;
+  updated: string;
+}
+
+interface GrinderStore {
+  profiles: Record<string, GrinderEntry>;
+}
+
+function readGrinderStore(): GrinderStore {
+  if (!existsSync(GRINDER_STORE_PATH)) return { profiles: {} };
+  try {
+    return JSON.parse(readFileSync(GRINDER_STORE_PATH, "utf-8")) as GrinderStore;
+  } catch {
+    return { profiles: {} };
+  }
+}
+
+function writeGrinderStore(store: GrinderStore): void {
+  if (!existsSync(GRINDER_STORE_DIR)) mkdirSync(GRINDER_STORE_DIR, { recursive: true });
+  writeFileSync(GRINDER_STORE_PATH, JSON.stringify(store, null, 2), "utf-8");
+}
+
+server.tool(
+  "set_grinder_context",
+  "Save the grinder model and setting for a profile. Call this whenever you change your grind size so Claude remembers it next session.",
+  {
+    profile_name: z.string().describe("The profile name to associate this grinder setting with"),
+    grinder: z.string().describe("Grinder model (e.g. 'DF83 V3')"),
+    setting: z.number().describe("Grinder setting / number"),
+    notes: z.string().optional().describe("Optional notes (e.g. 'too coarse, dropping to 10.5 next')"),
+  },
+  async ({ profile_name, grinder, setting, notes }) => {
+    const store = readGrinderStore();
+    store.profiles[profile_name] = {
+      grinder,
+      setting,
+      ...(notes ? { notes } : {}),
+      updated: new Date().toISOString().split("T")[0],
+    };
+    writeGrinderStore(store);
+    return {
+      content: [{ type: "text", text: `Saved: ${profile_name} → ${grinder} @ ${setting}${notes ? ` (${notes})` : ""}` }],
+    };
+  }
+);
+
+server.tool(
+  "get_grinder_context",
+  "Get the saved grinder model and setting for one or all profiles. Call this at the start of a session to recall where you left off.",
+  {
+    profile_name: z.string().optional().describe("Profile name to look up. Omit to get all profiles."),
+  },
+  async ({ profile_name }) => {
+    const store = readGrinderStore();
+    if (profile_name) {
+      const entry = store.profiles[profile_name];
+      if (!entry) {
+        return { content: [{ type: "text", text: `No grinder context saved for "${profile_name}".` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify({ [profile_name]: entry }, null, 2) }] };
+    }
+    if (Object.keys(store.profiles).length === 0) {
+      return { content: [{ type: "text", text: "No grinder context saved yet." }] };
+    }
+    return { content: [{ type: "text", text: JSON.stringify(store.profiles, null, 2) }] };
   }
 );
 
