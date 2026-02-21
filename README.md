@@ -194,6 +194,8 @@ If users already added a previous server definition, remove/re-add it so Claude 
 
 ## Available Tools
 
+> For a compact quick-reference with all parameters, see [COMMANDS.md](./COMMANDS.md).
+
 ### Machine Control
 
 | Tool | Description |
