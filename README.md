@@ -23,6 +23,7 @@ You only need your machine's local IP and one MCP server config entry.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `METICULOUS_IP` | **Yes** | Local IP of your Meticulous machine (find it in your router or the machine's settings) |
+| `MACHINE_IP` | No | Alternative to `METICULOUS_IP` — used as fallback if `METICULOUS_IP` is not set |
 
 ### Recommended (easy sharing) — Auto install with `npx`
 
@@ -33,7 +34,7 @@ Use this when sharing with others so they only add config and Claude installs/la
   "mcpServers": {
     "meticulous": {
       "command": "npx",
-      "args": ["-y", "github:YOUR_USERNAME/meticulous-mcp-server"],
+      "args": ["-y", "github:erdos2n/meticulous-mcp-server"],
       "env": {
         "METICULOUS_IP": "192.168.1.x"
       }
@@ -61,7 +62,7 @@ Then add to your Claude config:
 
 **Claude Desktop** — `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-**Claude Code** — `~/.claude/claude_code_config.json`
+**Claude Code** — `~/.claude.json`
 
 ```json
 {
@@ -120,7 +121,7 @@ No cloning or manual build required:
   "mcpServers": {
     "meticulous": {
       "command": "npx",
-      "args": ["-y", "github:YOUR_USERNAME/meticulous-mcp-server"],
+      "args": ["-y", "github:erdos2n/meticulous-mcp-server"],
       "env": {
         "METICULOUS_IP": "192.168.1.x"
       }
@@ -250,6 +251,13 @@ Use these options when needed:
 |------|-------------|
 | `validate_recipe` | Check schema + optional auto-fix for simple issues |
 | `get_shot_data_for_analysis` | Fetch full shot + profile data for Claude to analyze |
+
+### Grinder Context
+
+| Tool | Description |
+|------|-------------|
+| `set_grinder_context` | Save grinder model and setting for a profile (persists across sessions) |
+| `get_grinder_context` | Retrieve saved grinder model and setting for one or all profiles |
 
 ---
 
