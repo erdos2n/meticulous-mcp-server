@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "meticulous-mcp",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["tsx", "src/index.ts"],
+      "port": 0,
+      "env": {
+        "METICULOUS_IP": "127.0.0.1"
+      }
+    }
+  ]
+}
