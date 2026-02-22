@@ -303,13 +303,99 @@ Key rules:
 
 ---
 
+---
+
+## Remote HTTP Setup (Raspberry Pi + Claude Mobile)
+
+Run the server on a Raspberry Pi exposed via Cloudflare Tunnel so Claude mobile and claude.ai can reach your machine from anywhere.
+
+### Architecture
+
+Two entry points, one shared core:
+
+```
+src/
+├── server.ts   — all shared tools and Meticulous API logic
+├── index.ts    — stdio entry point (Claude Desktop / Claude Code on laptop)
+└── http.ts     — HTTP entry point (Pi / Cloudflare Tunnel / Claude mobile)
+```
+
+`index.ts` is never touched by the HTTP setup. Your existing laptop config keeps working exactly as it does today.
+
+### Required environment variables for HTTP mode
+
+| Variable | Description |
+|----------|-------------|
+| `METICULOUS_IP` | Same as always — local IP of your machine |
+| `MCP_AUTH_TOKEN` | Bearer token for authenticating HTTP requests |
+| `PORT` | Port to listen on (default: `3000`) |
+
+Copy `.env.example` to `.env` and fill in your values:
+
+```bash
+cp .env.example .env
+```
+
+### Generate an auth token
+
+```bash
+npm run generate-token
+```
+
+Copy the output into `.env` as `MCP_AUTH_TOKEN`. Paste the same token into your claude.ai connector config when prompted for a bearer token.
+
+### Run the HTTP server locally
+
+```bash
+npm run start:http
+```
+
+Or to run the original stdio server:
+
+```bash
+npm run start:stdio
+```
+
+### Test the HTTP server
+
+```bash
+# Health check — no token needed
+curl http://localhost:3000/health
+
+# Should return 401
+curl -X POST http://localhost:3000/mcp
+
+# Should return a valid MCP initialize response
+curl -X POST http://localhost:3000/mcp \
+  -H "Authorization: Bearer <your-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}},"id":1}'
+```
+
+### Raspberry Pi setup
+
+See the upgrade plan for full Pi + systemd + Cloudflare Tunnel instructions. Short version:
+
+1. Clone the repo on the Pi, `npm install && npm run build`
+2. Create a systemd service that runs `node dist/http.js` with `METICULOUS_IP` and `MCP_AUTH_TOKEN` env vars
+3. Install `cloudflared` and point a tunnel at `localhost:3000`
+4. Add the tunnel URL as a connector in claude.ai → Settings → Connectors
+
+Once added on claude.ai, it's automatically available on Claude mobile too.
+
+---
+
 ## Project Structure
 
 ```
 meticulous-mcp-server/
 ├── src/
-│   └── index.ts      # All MCP tools
+│   ├── server.ts     # All shared tools and Meticulous API logic
+│   ├── index.ts      # stdio entry point (Claude Desktop / Claude Code)
+│   └── http.ts       # HTTP entry point (Pi / Cloudflare Tunnel / Claude mobile)
 ├── dist/             # Compiled output (after npm run build)
+├── .env              # Local environment variables (gitignored)
+├── .env.example      # Template for .env
 ├── package.json
 ├── tsconfig.json
 └── README.md
