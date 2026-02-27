@@ -57,8 +57,19 @@ http-logs:
 # ── cloudflare tunnel ──────────────────────────────────────────────────────────
 
 # Start Cloudflare tunnel in background — logs to /tmp/cloudflared.log
+# Refuses to start if systemd cloudflared-tunnel service is already running
 tunnel-bg:
     #!/usr/bin/env bash
+    if systemctl is-active --quiet cloudflared-tunnel 2>/dev/null; then
+      echo "❌ cloudflared-tunnel systemd service is already running."
+      echo "   Use 'just tunnel-url-service' to get the URL, or 'sudo systemctl stop cloudflared-tunnel' to switch to bg mode."
+      exit 1
+    fi
+    if [ -f /tmp/cloudflared.pid ] && kill -0 "$(cat /tmp/cloudflared.pid)" 2>/dev/null; then
+      echo "❌ Background tunnel already running (PID $(cat /tmp/cloudflared.pid))."
+      echo "   Use 'just tunnel-url' to get the URL, or 'just stop-tunnel' to restart it."
+      exit 1
+    fi
     nohup cloudflared tunnel --url http://localhost:${PORT:-3000} > /tmp/cloudflared.log 2>&1 &
     echo $! > /tmp/cloudflared.pid
     echo "Cloudflare tunnel starting (PID $(cat /tmp/cloudflared.pid)) ..."
@@ -68,10 +79,13 @@ tunnel-bg:
 # Stop background Cloudflare tunnel
 stop-tunnel:
     #!/usr/bin/env bash
-    if [ -f /tmp/cloudflared.pid ]; then
+    if [ -f /tmp/cloudflared.pid ] && kill -0 "$(cat /tmp/cloudflared.pid)" 2>/dev/null; then
       PID=$(cat /tmp/cloudflared.pid)
       kill "$PID" && rm /tmp/cloudflared.pid
       echo "Tunnel stopped (PID $PID)"
+    elif [ -f /tmp/cloudflared.pid ]; then
+      echo "PID file found but process is gone — cleaning up"
+      rm /tmp/cloudflared.pid
     else
       echo "No background tunnel running (no PID file found)"
     fi
@@ -85,13 +99,19 @@ tunnel-logs:
     tail -f /tmp/cloudflared.log
 
 # Generate cloudflared systemd service and enable it (tunnel survives reboots)
+# Stops any background tunnel first to avoid running two instances
 enable-tunnel:
-    @just generate-tunnel-service
+    #!/usr/bin/env bash
+    if [ -f /tmp/cloudflared.pid ] && kill -0 "$(cat /tmp/cloudflared.pid)" 2>/dev/null; then
+      echo "Stopping background tunnel (PID $(cat /tmp/cloudflared.pid)) before enabling service..."
+      kill "$(cat /tmp/cloudflared.pid)" && rm /tmp/cloudflared.pid
+    fi
+    just generate-tunnel-service
     sudo systemctl daemon-reload
     sudo systemctl enable cloudflared-tunnel
     sudo systemctl start cloudflared-tunnel
-    @echo "✅ Cloudflare tunnel service enabled"
-    @echo "   URL (may take ~10s to appear): just tunnel-url-service"
+    echo "✅ Cloudflare tunnel service enabled"
+    echo "   URL (may take ~10s to appear): just tunnel-url-service"
 
 # Print the tunnel URL from the systemd service logs
 tunnel-url-service:
