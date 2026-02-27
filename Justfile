@@ -54,6 +54,76 @@ stop-http-bg:
 http-logs:
     tail -f /tmp/meticulous-mcp.log
 
+# ── cloudflare tunnel ──────────────────────────────────────────────────────────
+
+# Start Cloudflare tunnel in background — logs to /tmp/cloudflared.log
+tunnel-bg:
+    #!/usr/bin/env bash
+    nohup cloudflared tunnel --url http://localhost:${PORT:-3000} > /tmp/cloudflared.log 2>&1 &
+    echo $! > /tmp/cloudflared.pid
+    echo "Cloudflare tunnel starting (PID $(cat /tmp/cloudflared.pid)) ..."
+    sleep 5
+    just tunnel-url
+
+# Stop background Cloudflare tunnel
+stop-tunnel:
+    #!/usr/bin/env bash
+    if [ -f /tmp/cloudflared.pid ]; then
+      PID=$(cat /tmp/cloudflared.pid)
+      kill "$PID" && rm /tmp/cloudflared.pid
+      echo "Tunnel stopped (PID $PID)"
+    else
+      echo "No background tunnel running (no PID file found)"
+    fi
+
+# Print the current tunnel URL (from background tunnel log)
+tunnel-url:
+    @grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' /tmp/cloudflared.log | tail -1
+
+# Tail Cloudflare tunnel logs
+tunnel-logs:
+    tail -f /tmp/cloudflared.log
+
+# Generate cloudflared systemd service and enable it (tunnel survives reboots)
+enable-tunnel:
+    @just generate-tunnel-service
+    sudo systemctl daemon-reload
+    sudo systemctl enable cloudflared-tunnel
+    sudo systemctl start cloudflared-tunnel
+    @echo "✅ Cloudflare tunnel service enabled"
+    @echo "   URL (may take ~10s to appear): just tunnel-url-service"
+
+# Print the tunnel URL from the systemd service logs
+tunnel-url-service:
+    @journalctl -u cloudflared-tunnel --no-pager | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' | tail -1
+
+# Write /etc/systemd/system/cloudflared-tunnel.service
+generate-tunnel-service:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    SERVICE_USER=$(whoami)
+    CF_PATH=$(which cloudflared)
+    PORT=${PORT:-3000}
+    printf '%s\n' \
+      '[Unit]' \
+      'Description=Cloudflare Tunnel for Meticulous MCP' \
+      'After=network.target meticulous-mcp.service' \
+      '' \
+      '[Service]' \
+      'Type=simple' \
+      "User=$SERVICE_USER" \
+      "ExecStart=$CF_PATH tunnel --url http://localhost:$PORT" \
+      'Restart=always' \
+      'RestartSec=10' \
+      '' \
+      '[Install]' \
+      'WantedBy=multi-user.target' \
+      | sudo tee /etc/systemd/system/cloudflared-tunnel.service > /dev/null
+    echo "✅ Tunnel service file written"
+    echo "   User: $SERVICE_USER"
+    echo "   cloudflared: $CF_PATH"
+    echo "   Port: $PORT"
+
 # Run the HTTP server in dev mode with live reload
 dev-http:
     npx tsx watch src/http.ts
