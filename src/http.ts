@@ -11,17 +11,20 @@
  *   OAUTH_CLIENT_ID  - OAuth client ID ("token secret id" in claude.ai connector) (required)
  *   PORT             - HTTP port to listen on (default: 3000)
  *
- * OAuth 2.0 client credentials flow (used by claude.ai custom connectors):
+ * OAuth 2.0 Authorization Code + PKCE flow (used by claude.ai custom connectors):
  *   1. claude.ai fetches GET /.well-known/oauth-authorization-server
- *   2. claude.ai POSTs /oauth/token with client_id=OAUTH_CLIENT_ID, client_secret=MCP_AUTH_TOKEN
- *   3. Server returns { access_token: MCP_AUTH_TOKEN }
- *   4. claude.ai uses Bearer <access_token> for all /mcp requests
+ *   2. claude.ai redirects browser to GET /authorize?response_type=code&client_id=...&code_challenge=...
+ *   3. Server auto-approves and redirects back to claude.ai with a one-time code
+ *   4. claude.ai POSTs /oauth/token with grant_type=authorization_code&code=...&code_verifier=...
+ *   5. Server verifies PKCE, returns { access_token: MCP_AUTH_TOKEN }
+ *   6. claude.ai uses Bearer <access_token> for all /mcp requests
  *
  * In claude.ai connector settings:
  *   - Token secret id  →  value of OAUTH_CLIENT_ID in your .env
  *   - Token secret key →  value of MCP_AUTH_TOKEN in your .env
  */
 
+import { createHash, randomBytes } from "crypto";
 import express from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer, METICULOUS_IP } from "./server.js";
@@ -67,34 +70,119 @@ function requireAuth(req: express.Request, res: express.Response, next: express.
 }
 
 // ============================================================
-// OAUTH 2.0 — client_credentials flow for claude.ai connector
+// OAUTH 2.0 — Authorization Code + PKCE flow
 // ============================================================
 
-// Discovery metadata — claude.ai fetches this to find the token endpoint
+// In-memory store for one-time auth codes (auto-expires after 5 minutes)
+interface AuthCode {
+  codeChallenge: string;
+  redirectUri: string;
+  clientId: string;
+  expiresAt: number;
+}
+const authCodes = new Map<string, AuthCode>();
+
+// Clean up expired codes every 10 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, data] of authCodes) {
+    if (data.expiresAt < now) authCodes.delete(code);
+  }
+}, 10 * 60 * 1000);
+
+// Discovery metadata — claude.ai fetches this to find the authorization + token endpoints
 app.get("/.well-known/oauth-authorization-server", (req, res) => {
   const base = `${req.protocol}://${req.get("host")}`;
   res.json({
     issuer: base,
+    authorization_endpoint: `${base}/authorize`,
     token_endpoint: `${base}/oauth/token`,
-    grant_types_supported: ["client_credentials"],
-    token_endpoint_auth_methods_supported: ["client_secret_post"],
+    grant_types_supported: ["authorization_code"],
+    response_types_supported: ["code"],
+    code_challenge_methods_supported: ["S256"],
+    token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
   });
 });
 
-// Token endpoint — issues MCP_AUTH_TOKEN as the access token
-app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => {
-  const { client_id, client_secret, grant_type } = req.body;
+// Authorization endpoint — claude.ai redirects the browser here to kick off auth
+// Since this is a private single-user server, we auto-approve immediately
+app.get("/authorize", (req, res) => {
+  const { response_type, client_id, redirect_uri, code_challenge, code_challenge_method, state } =
+    req.query as Record<string, string>;
 
-  if (grant_type !== "client_credentials") {
+  if (response_type !== "code") {
+    res.status(400).json({ error: "unsupported_response_type" });
+    return;
+  }
+  if (client_id !== OAUTH_CLIENT_ID) {
+    res.status(401).json({ error: "invalid_client" });
+    return;
+  }
+  if (!code_challenge || code_challenge_method !== "S256") {
+    res.status(400).json({ error: "invalid_request", error_description: "PKCE S256 required" });
+    return;
+  }
+  if (!redirect_uri) {
+    res.status(400).json({ error: "invalid_request", error_description: "redirect_uri required" });
+    return;
+  }
+
+  // Generate a one-time auth code, store it with the PKCE challenge
+  const code = randomBytes(32).toString("hex");
+  authCodes.set(code, {
+    codeChallenge: code_challenge,
+    redirectUri: redirect_uri,
+    clientId: client_id,
+    expiresAt: Date.now() + 5 * 60 * 1000, // 5 minutes
+  });
+
+  // Redirect back to claude.ai with the code
+  const callbackUrl = new URL(redirect_uri);
+  callbackUrl.searchParams.set("code", code);
+  if (state) callbackUrl.searchParams.set("state", state);
+
+  console.log(`OAuth: authorized client_id=${client_id}, redirecting to callback`);
+  res.redirect(callbackUrl.toString());
+});
+
+// Token endpoint — exchanges auth code + code_verifier for an access token
+app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => {
+  const { grant_type, code, code_verifier, redirect_uri, client_id } = req.body;
+
+  if (grant_type !== "authorization_code") {
     res.status(400).json({ error: "unsupported_grant_type" });
     return;
   }
 
-  if (client_id !== OAUTH_CLIENT_ID || client_secret !== AUTH_TOKEN) {
-    res.status(401).json({ error: "invalid_client" });
+  const stored = authCodes.get(code);
+  if (!stored || stored.expiresAt < Date.now()) {
+    authCodes.delete(code);
+    res.status(400).json({ error: "invalid_grant", error_description: "Code expired or not found" });
     return;
   }
 
+  if (stored.clientId !== client_id || stored.redirectUri !== redirect_uri) {
+    res.status(400).json({ error: "invalid_grant", error_description: "client_id or redirect_uri mismatch" });
+    return;
+  }
+
+  // Verify PKCE: SHA256(code_verifier) base64url must equal stored code_challenge
+  const computed = createHash("sha256")
+    .update(code_verifier)
+    .digest("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=/g, "");
+
+  if (computed !== stored.codeChallenge) {
+    res.status(400).json({ error: "invalid_grant", error_description: "PKCE verification failed" });
+    return;
+  }
+
+  // Consume the code (one-time use)
+  authCodes.delete(code);
+
+  console.log(`OAuth: token issued for client_id=${client_id}`);
   res.json({
     access_token: AUTH_TOKEN,
     token_type: "bearer",
