@@ -29,17 +29,18 @@ Your laptop uses `src/index.ts` → stdio → Claude Desktop / Claude Code — u
 
 ## Prerequisites
 
-- Pi already cloned the repo and ran `npm run build` (confirm with `ls ~/meticulous-mcp-server/dist/`)
+- Pi has the repo cloned (e.g. `~/meticulous-mcp-server`)
 - Your Meticulous machine's local IP (e.g. `192.168.1.x`)
 - A bearer token — generate one now on your laptop:
   ```bash
-  npm run generate-token
+  just generate-token
+  # or: npm run generate-token
   ```
-  Save this somewhere safe (password manager). You'll paste it in two places: the systemd service below, and claude.ai's connector settings.
+  Save this somewhere safe (password manager). You'll paste it in the `.env` file below and in claude.ai's connector settings.
 
 ---
 
-## Step 1 — Pull the latest code and rebuild
+## Step 1 — Run the setup script (installs Node, just, cloudflared)
 
 SSH into the Pi and run:
 
@@ -47,9 +48,10 @@ SSH into the Pi and run:
 ssh pi@meticulous-pi.local
 cd ~/meticulous-mcp-server
 git pull
-npm install
-npm run build
+./pi-setup.sh
 ```
+
+`pi-setup.sh` installs Node.js 20 LTS, `just`, `cloudflared`, and `jq`, then runs `npm install` and `npm run build` automatically.
 
 Verify the HTTP entry point compiled:
 
@@ -60,10 +62,31 @@ ls dist/http.js
 
 ---
 
-## Step 2 — Quick smoke test (before setting up systemd)
+## Step 2 — Create your .env file
 
 ```bash
-MCP_AUTH_TOKEN=your-token-here METICULOUS_IP=192.168.x.x npm run start:http
+cd ~/meticulous-mcp-server
+nano .env
+```
+
+Paste (with your real values):
+
+```env
+METICULOUS_IP=192.168.x.x
+MCP_AUTH_TOKEN=your-token-here
+PORT=3000
+```
+
+Save: `Ctrl+X` → `Y` → `Enter`
+
+The `Justfile` has `set dotenv-load := true`, so `just` commands automatically pick up `.env`.
+
+---
+
+## Step 2b — Quick smoke test
+
+```bash
+just start-http
 ```
 
 Expected output:
@@ -80,38 +103,62 @@ Press `Ctrl+C` to stop. If it fails, check:
 
 ## Step 3 — Sanity tests (run from the Pi in a second terminal)
 
-While `start:http` is running, open another SSH session and run these:
+While `just start-http` is running, open another SSH session. Tests read `MCP_AUTH_TOKEN` and `METICULOUS_IP` from your `.env` file automatically.
+
+**Easiest — run all four tests at once:**
+
+```bash
+just test
+```
+
+**Or run them individually:**
 
 ```bash
 # 1. Health check — no auth needed
-curl http://localhost:3000/health
-# Expected: {"status":"ok","machine":"192.168.x.x"}
+just health
+# Expected: {"status":"ok","machine":"<your METICULOUS_IP>"}
 
-# 2. Auth rejection — should get 401
-curl -X POST http://localhost:3000/mcp
-# Expected: {"error":"Unauthorized"}
+# 2. Auth rejection — should return 401
+just test-auth
+# Expected: 401
 
-# 3. MCP initialize handshake — replace YOUR_TOKEN
-# Note: MCP Streamable HTTP requires Accept to include both types
-curl -X POST http://localhost:3000/mcp \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}},"id":1}'
-# Expected: JSON response with "serverInfo" containing "meticulous-espresso"
+# 3. MCP initialize handshake
+just test-init
+# Expected: JSON with "serverInfo" containing "meticulous-espresso"
 
-# 4. Real tool call — list profiles from your machine
-curl -X POST http://localhost:3000/mcp \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"list_profiles","arguments":{}},"id":2}'
+# 4. List profiles from your machine
+just test-profiles
 # Expected: your actual profiles from the Meticulous machine
 ```
 
-If test 4 returns an error about connecting to the machine, double-check that:
+**Or raw curl with env vars (if you prefer):**
+
+```bash
+# Source .env so $MCP_AUTH_TOKEN is available in your shell
+set -a && source .env && set +a
+
+# Health
+curl -s http://localhost:3000/health | jq .
+
+# Initialize
+# Note: MCP Streamable HTTP requires Accept to include both content types
+curl -s -X POST http://localhost:3000/mcp \
+  -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}},"id":1}' | jq .
+
+# List profiles
+curl -s -X POST http://localhost:3000/mcp \
+  -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"list_profiles","arguments":{}},"id":2}' | jq .
+```
+
+If test 4 returns a machine connection error, double-check:
 - The Pi and the Meticulous machine are on the same Wi-Fi network
-- `METICULOUS_IP` is the machine's current IP (check your router if unsure)
+- `METICULOUS_IP` in `.env` is the current IP (check your router if unsure)
 
 ---
 
@@ -123,7 +170,7 @@ This keeps the server running and restarts it automatically after reboots or cra
 sudo nano /etc/systemd/system/meticulous-mcp.service
 ```
 
-Paste the following — replace `192.168.x.x` with your machine's real IP and `your-token-here` with your generated token:
+Paste the following (env vars are loaded from `.env` via `EnvironmentFile`):
 
 ```ini
 [Unit]
@@ -134,9 +181,7 @@ After=network.target
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/meticulous-mcp-server
-Environment=METICULOUS_IP=192.168.x.x
-Environment=MCP_AUTH_TOKEN=your-token-here
-Environment=PORT=3000
+EnvironmentFile=/home/pi/meticulous-mcp-server/.env
 ExecStart=/usr/bin/node /home/pi/meticulous-mcp-server/dist/http.js
 Restart=always
 RestartSec=5
@@ -147,36 +192,33 @@ WantedBy=multi-user.target
 
 Save: `Ctrl+X` → `Y` → `Enter`
 
-Enable and start:
+Enable and start (or just use `just`):
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable meticulous-mcp
-sudo systemctl start meticulous-mcp
-sudo systemctl status meticulous-mcp
+just enable
+# equivalent to: sudo systemctl daemon-reload && sudo systemctl enable meticulous-mcp && sudo systemctl start meticulous-mcp
 ```
 
-Should show **active (running)** in green.
-
-Useful commands going forward:
+Should show **active (running)** in green. Verify:
 
 ```bash
-sudo journalctl -u meticulous-mcp -f    # live logs
-sudo systemctl restart meticulous-mcp   # restart
-sudo systemctl stop meticulous-mcp      # stop
+just status
+```
+
+Useful `just` commands going forward:
+
+```bash
+just logs      # live logs (journalctl -f)
+just restart   # restart service
+just stop      # stop service
+just deploy    # git pull + npm install + build + restart (one command for future updates)
 ```
 
 ---
 
-## Step 5 — Install and start Cloudflare Tunnel
+## Step 5 — Start Cloudflare Tunnel
 
-```bash
-curl -L --output cloudflared.deb \
-  https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm.deb
-sudo dpkg -i cloudflared.deb
-```
-
-Start a quick temporary tunnel:
+`cloudflared` was installed by `pi-setup.sh`. Start a quick temporary tunnel:
 
 ```bash
 cloudflared tunnel --url http://localhost:3000
@@ -216,12 +258,11 @@ Test it: ask Claude "What profiles are on my Meticulous machine?"
 
 ## Future updates
 
-When you push changes to GitHub, update the Pi with:
+One command to pull, rebuild, and restart:
 
 ```bash
 ssh pi@meticulous-pi.local
-cd ~/meticulous-mcp-server && git pull && npm install && npm run build
-sudo systemctl restart meticulous-mcp
+cd ~/meticulous-mcp-server && just deploy
 ```
 
 ---
@@ -230,8 +271,8 @@ sudo systemctl restart meticulous-mcp
 
 | Problem | Check |
 |---------|-------|
-| `systemctl status` shows failed | `sudo journalctl -u meticulous-mcp -n 50` for error details |
-| Health check returns connection refused | systemd service not running — `sudo systemctl start meticulous-mcp` |
-| Tool calls return machine connection error | Meticulous IP wrong or machine offline; verify with `curl http://192.168.x.x` from the Pi |
-| 401 on all requests | Token mismatch — compare `MCP_AUTH_TOKEN` in service file vs what you entered in claude.ai |
+| `just status` shows failed | `just logs` for error details |
+| Health check returns connection refused | Service not running — `just enable` or `just restart` |
+| Tool calls return machine connection error | Check `METICULOUS_IP` in `.env`; verify with `curl http://192.168.x.x` from the Pi |
+| 401 on all requests | Token mismatch — compare `MCP_AUTH_TOKEN` in `.env` vs what you entered in claude.ai |
 | Cloudflare URL not reachable | Tunnel may have restarted (URL changes); re-run `cloudflared tunnel --url http://localhost:3000` |
