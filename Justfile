@@ -31,6 +31,29 @@ start:
 start-http:
     node dist/http.js
 
+# Start HTTP server in background — logs to /tmp/meticulous-mcp.log
+start-http-bg:
+    #!/usr/bin/env bash
+    nohup node dist/http.js > /tmp/meticulous-mcp.log 2>&1 &
+    echo $! > /tmp/meticulous-mcp.pid
+    echo "Server started (PID $(cat /tmp/meticulous-mcp.pid))"
+    echo "Logs: tail -f /tmp/meticulous-mcp.log"
+
+# Stop background HTTP server started with start-http-bg
+stop-http-bg:
+    #!/usr/bin/env bash
+    if [ -f /tmp/meticulous-mcp.pid ]; then
+      PID=$(cat /tmp/meticulous-mcp.pid)
+      kill "$PID" && rm /tmp/meticulous-mcp.pid
+      echo "Server stopped (PID $PID)"
+    else
+      echo "No background server running (no PID file found)"
+    fi
+
+# Tail logs from background HTTP server
+http-logs:
+    tail -f /tmp/meticulous-mcp.log
+
 # Run the HTTP server in dev mode with live reload
 dev-http:
     npx tsx watch src/http.ts
@@ -118,12 +141,14 @@ test-auth port="3000":
     curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:{{port}}/mcp
 
 # Full MCP initialize handshake — requires MCP_AUTH_TOKEN in env or .env
+# Response is SSE format (data: {...}) — strip prefix before parsing
 test-init port="3000":
     curl -s -X POST http://localhost:{{port}}/mcp \
       -H "Authorization: Bearer ${MCP_AUTH_TOKEN}" \
       -H "Content-Type: application/json" \
       -H "Accept: application/json, text/event-stream" \
-      -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}},"id":1}' | jq .
+      -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}},"id":1}' \
+      | grep '^data:' | sed 's/^data: //' | jq .
 
 # List profiles from the machine — requires MCP_AUTH_TOKEN + METICULOUS_IP in env or .env
 test-profiles port="3000":
@@ -131,7 +156,8 @@ test-profiles port="3000":
       -H "Authorization: Bearer ${MCP_AUTH_TOKEN}" \
       -H "Content-Type: application/json" \
       -H "Accept: application/json, text/event-stream" \
-      -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"list_profiles","arguments":{}},"id":2}' | jq .
+      -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"list_profiles","arguments":{}},"id":2}' \
+      | grep '^data:' | sed 's/^data: //' | jq .
 
 # Run all sanity tests in sequence
 test port="3000":
