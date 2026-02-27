@@ -227,6 +227,8 @@ From any machine (your laptop, phone, etc.):
 # Health check via tunnel
 curl https://xxxx.trycloudflare.com/health
 # Expected: {"status":"ok","machine":"192.168.x.x"}
+
+# Note: the connector URL needs /mcp at the end — claude.ai uses it as the exact MCP endpoint
 ```
 
 ---
@@ -243,7 +245,7 @@ The server handles this automatically — you just need to fill in the four fiel
 | Field | Value |
 |-------|-------|
 | **Name** | Meticulous (or anything you like) |
-| **URL** | `https://xxxx.trycloudflare.com` *(tunnel URL, no `/mcp` suffix)* |
+| **URL** | `https://xxxx.trycloudflare.com/mcp` *(include the `/mcp` suffix)* |
 | **Token secret id** | Value of `OAUTH_CLIENT_ID` from your `.env` (e.g. `meticulous-mcp`) |
 | **Token secret key** | Value of `MCP_AUTH_TOKEN` from your `.env` |
 
