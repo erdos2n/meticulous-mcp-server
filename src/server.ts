@@ -221,6 +221,21 @@ Help the user dial in their espresso by analyzing shots, interpreting tasting fe
 ## Grinder tracking
 Always check grinder context at the start of a session. When the user changes grind setting, call set_grinder_context to persist it. Include current grinder/setting when discussing extraction changes.
 
+## Shot diary
+Always call read_diary at the start of a session to recall past tasting notes and dial-in history.
+After each shot is discussed or rated, call append_diary_entry to log it. Use this Markdown format:
+
+## Shot N: <Profile Name>
+**Date:** <ISO datetime>
+**Coffee:** <coffee name>
+**Input:** <dose>g
+**Grinder:** <model> @ <setting>
+**Temperature:** <temp>°C
+**Yield:** <yield>g
+**Tasting Notes:** <notes>
+**Profile:** <profile name>
+**Notes:** <extraction observations>
+
 ## Profile schema key rules
 - stages[].dynamics.points starts at [0, value]
 - dynamics.over must be "time"
@@ -846,6 +861,7 @@ server.tool(
 
 const GRINDER_STORE_DIR = join(homedir(), ".meticulous-mcp");
 const GRINDER_STORE_PATH = join(GRINDER_STORE_DIR, "grinder.json");
+const DIARY_PATH = join(GRINDER_STORE_DIR, "espresso_diary.md");
 
 interface GrinderEntry {
   grinder: string;
@@ -870,6 +886,22 @@ function readGrinderStore(): GrinderStore {
 function writeGrinderStore(store: GrinderStore): void {
   if (!existsSync(GRINDER_STORE_DIR)) mkdirSync(GRINDER_STORE_DIR, { recursive: true });
   writeFileSync(GRINDER_STORE_PATH, JSON.stringify(store, null, 2), "utf-8");
+}
+
+// ============================================================
+// DIARY HELPERS
+// ============================================================
+
+function readDiary(): string {
+  if (!existsSync(DIARY_PATH)) return "";
+  return readFileSync(DIARY_PATH, "utf-8");
+}
+
+function appendDiary(entry: string): void {
+  if (!existsSync(GRINDER_STORE_DIR)) mkdirSync(GRINDER_STORE_DIR, { recursive: true });
+  const current = readDiary();
+  const separator = current.length > 0 ? "\n\n---\n\n" : "";
+  writeFileSync(DIARY_PATH, current + separator + entry, "utf-8");
 }
 
 server.tool(
@@ -915,5 +947,44 @@ server.tool(
       return { content: [{ type: "text", text: "No grinder context saved yet." }] };
     }
     return { content: [{ type: "text", text: JSON.stringify(store.profiles, null, 2) }] };
+  }
+);
+
+// ============================================================
+// DIARY TOOLS
+// ============================================================
+
+server.tool(
+  "read_diary",
+  "Read the full espresso shot diary. Call this at the start of a session to recall past shots, tasting notes, and dial-in history.",
+  {},
+  async () => {
+    const content = readDiary();
+    if (!content) {
+      return {
+        content: [{ type: "text", text: `No diary entries yet. Use append_diary_entry to start logging shots.\n\nDiary location: ${DIARY_PATH}` }],
+      };
+    }
+    return {
+      content: [{ type: "text", text: content }],
+    };
+  }
+);
+
+server.tool(
+  "append_diary_entry",
+  "Append a new entry to the espresso shot diary. Call this after each shot to log tasting notes, grinder setting, yield, and observations. Use Markdown formatting matching the diary style.",
+  {
+    entry: z
+      .string()
+      .describe(
+        "Markdown content to append. Use this format:\n## Shot N: <Profile Name>\n**Date:** <ISO datetime>\n**Coffee:** <coffee name>\n**Input:** <dose>g\n**Grinder:** <model> @ <setting>\n**Temperature:** <temp>°C\n**Yield:** <yield>g\n**Tasting Notes:** <notes>\n**Profile:** <profile name>\n**Notes:** <extraction observations>"
+      ),
+  },
+  async ({ entry }) => {
+    appendDiary(entry);
+    return {
+      content: [{ type: "text", text: `Diary entry appended to ${DIARY_PATH}` }],
+    };
   }
 );
