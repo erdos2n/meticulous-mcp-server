@@ -128,24 +128,23 @@ generate-service:
     WORK_DIR=$(pwd)
     NODE_PATH=$(which node)
     SERVICE_FILE=/etc/systemd/system/meticulous-mcp.service
-    cat > /tmp/meticulous-mcp.service << EOF
-[Unit]
-Description=Meticulous MCP HTTP Server
-After=network.target
-
-[Service]
-Type=simple
-User=$SERVICE_USER
-WorkingDirectory=$WORK_DIR
-EnvironmentFile=$WORK_DIR/.env
-ExecStart=$NODE_PATH $WORK_DIR/dist/http.js
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    sudo mv /tmp/meticulous-mcp.service "$SERVICE_FILE"
+    printf '%s\n' \
+      '[Unit]' \
+      'Description=Meticulous MCP HTTP Server' \
+      'After=network.target' \
+      '' \
+      '[Service]' \
+      'Type=simple' \
+      "User=$SERVICE_USER" \
+      "WorkingDirectory=$WORK_DIR" \
+      "EnvironmentFile=$WORK_DIR/.env" \
+      "ExecStart=$NODE_PATH $WORK_DIR/dist/http.js" \
+      'Restart=always' \
+      'RestartSec=5' \
+      '' \
+      '[Install]' \
+      'WantedBy=multi-user.target' \
+      | sudo tee "$SERVICE_FILE" > /dev/null
     echo "✅ Service file written: $SERVICE_FILE"
     echo "   User: $SERVICE_USER"
     echo "   WorkDir: $WORK_DIR"
