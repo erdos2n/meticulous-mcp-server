@@ -10,10 +10,11 @@
  *   METICULOUS_IP  - IP of your Meticulous machine on your local network (required)
  */
 
-import { server, METICULOUS_IP } from "./server.js";
+import { createServer, METICULOUS_IP } from "./server.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 async function main() {
+  const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(`Meticulous MCP server started — connected to machine at ${METICULOUS_IP}`);

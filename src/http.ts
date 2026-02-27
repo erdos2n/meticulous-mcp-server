@@ -13,7 +13,7 @@
 
 import express from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { server, METICULOUS_IP } from "./server.js";
+import { createServer, METICULOUS_IP } from "./server.js";
 
 // Fail fast if auth token is not configured
 const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN;
@@ -47,12 +47,14 @@ function requireAuth(req: express.Request, res: express.Response, next: express.
 // ============================================================
 
 app.post("/mcp", requireAuth, async (req, res) => {
+  const server = createServer();
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
 });
 
 app.get("/mcp", requireAuth, async (req, res) => {
+  const server = createServer();
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   await server.connect(transport);
   await transport.handleRequest(req, res);

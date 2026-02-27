@@ -243,7 +243,8 @@ After each shot is discussed or rated, call append_diary_entry to log it. Use th
 - Last stage exit trigger: { type: "weight", value: <final_weight> }
 `.trim();
 
-export const server = new McpServer(
+export function createServer() {
+const server = new McpServer(
   {
     name: "meticulous-espresso",
     version: "1.0.0",
@@ -988,3 +989,6 @@ server.tool(
     };
   }
 );
+
+return server;
+}
