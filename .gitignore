@@ -4,5 +4,6 @@ dist/
 *.env.local
 .DS_Store
 TODO.md
+PI_SUMMARY.md
 .claude/worktrees/
 .claude.code-workspace
