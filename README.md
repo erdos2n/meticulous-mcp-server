@@ -303,13 +303,60 @@ Key rules:
 
 ---
 
+---
+
+## Remote HTTP Setup (Raspberry Pi + Claude Mobile)
+
+Run the server on a Pi so claude.ai and Claude mobile can reach it via a Cloudflare Tunnel.
+
+### Architecture
+
+Two entry points, one shared core:
+
+```
+src/
+├── server.ts   ← all shared tools and Meticulous API logic
+├── index.ts    ← stdio entry point (laptop / Claude Desktop / Claude Code)
+└── http.ts     ← HTTP entry point (Pi / Cloudflare Tunnel / claude.ai / Claude mobile)
+```
+
+### Additional environment variables (HTTP mode only)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `MCP_AUTH_TOKEN` | **Yes** | Bearer token for request authentication |
+| `PORT` | No | HTTP port (default: `3000`) |
+
+### Generate a token
+
+```bash
+npm run generate-token
+```
+
+Save the output somewhere safe — you'll paste it into the Pi's systemd service file and into claude.ai's connector settings.
+
+### Start the HTTP server
+
+```bash
+MCP_AUTH_TOKEN=your-token METICULOUS_IP=192.168.x.x npm run start:http
+```
+
+### Full Pi setup
+
+See **[PI_SETUP_INSTRUCTIONS.md](./PI_SETUP_INSTRUCTIONS.md)** for the complete walkthrough including systemd service, Cloudflare Tunnel, and connector setup.
+
+---
+
 ## Project Structure
 
 ```
 meticulous-mcp-server/
 ├── src/
-│   └── index.ts      # All MCP tools
+│   ├── server.ts     # Shared MCP tools and machine logic
+│   ├── index.ts      # stdio entry point (laptop)
+│   └── http.ts       # HTTP entry point (Pi / remote)
 ├── dist/             # Compiled output (after npm run build)
+├── PI_SETUP_INSTRUCTIONS.md
 ├── package.json
 ├── tsconfig.json
 └── README.md
