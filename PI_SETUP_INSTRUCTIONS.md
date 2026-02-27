@@ -92,9 +92,11 @@ curl -X POST http://localhost:3000/mcp
 # Expected: {"error":"Unauthorized"}
 
 # 3. MCP initialize handshake — replace YOUR_TOKEN
+# Note: MCP Streamable HTTP requires Accept to include both types
 curl -X POST http://localhost:3000/mcp \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}},"id":1}'
 # Expected: JSON response with "serverInfo" containing "meticulous-espresso"
 
@@ -102,6 +104,7 @@ curl -X POST http://localhost:3000/mcp \
 curl -X POST http://localhost:3000/mcp \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"list_profiles","arguments":{}},"id":2}'
 # Expected: your actual profiles from the Meticulous machine
 ```
