@@ -173,40 +173,22 @@ If test 4 returns a machine connection error, double-check:
 
 This keeps the server running and restarts it automatically after reboots or crashes.
 
-```bash
-sudo nano /etc/systemd/system/meticulous-mcp.service
-```
-
-Paste the following (env vars are loaded from `.env` via `EnvironmentFile`):
-
-```ini
-[Unit]
-Description=Meticulous MCP HTTP Server
-After=network.target
-
-[Service]
-Type=simple
-User=pi
-WorkingDirectory=/home/pi/meticulous-mcp-server
-EnvironmentFile=/home/pi/meticulous-mcp-server/.env
-ExecStart=/usr/bin/node /home/pi/meticulous-mcp-server/dist/http.js
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Save: `Ctrl+X` → `Y` → `Enter`
-
-Enable and start (or just use `just`):
+One command does everything — generates the service file from your current user and directory, then enables and starts it:
 
 ```bash
 just enable
-# equivalent to: sudo systemctl daemon-reload && sudo systemctl enable meticulous-mcp && sudo systemctl start meticulous-mcp
 ```
 
-Should show **active (running)** in green. Verify:
+Expected output:
+```
+✅ Service file written: /etc/systemd/system/meticulous-mcp.service
+   User: pi
+   WorkDir: /home/pi/meticulous-mcp-server
+   Node: /usr/bin/node
+active
+```
+
+Verify it's running:
 
 ```bash
 just status
