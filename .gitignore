@@ -4,3 +4,5 @@ dist/
 *.env.local
 .DS_Store
 TODO.md
+.claude/worktrees/
+.claude.code-workspace
