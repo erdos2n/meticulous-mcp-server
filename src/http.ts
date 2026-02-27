@@ -195,17 +195,27 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
 // ============================================================
 
 app.post("/mcp", requireAuth, async (req, res) => {
-  const server = createServer();
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  await server.connect(transport);
-  await transport.handleRequest(req, res, req.body);
+  try {
+    const server = createServer();
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } catch (err) {
+    console.error("MCP POST error:", err);
+    if (!res.headersSent) res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 app.get("/mcp", requireAuth, async (req, res) => {
-  const server = createServer();
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  await server.connect(transport);
-  await transport.handleRequest(req, res);
+  try {
+    const server = createServer();
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    await server.connect(transport);
+    await transport.handleRequest(req, res);
+  } catch (err) {
+    console.error("MCP GET error:", err);
+    if (!res.headersSent) res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // ============================================================
@@ -225,4 +235,13 @@ app.listen(PORT, () => {
   console.log(`Meticulous MCP HTTP server running on port ${PORT}`);
   console.log(`Machine IP: ${METICULOUS_IP}`);
   console.log(`OAuth client ID: ${OAUTH_CLIENT_ID}`);
+});
+
+// Log unhandled errors loudly rather than crashing silently.
+// systemd Restart=always will bring the process back if it does exit.
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
 });
