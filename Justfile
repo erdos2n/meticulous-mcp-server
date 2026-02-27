@@ -47,27 +47,53 @@ generate-token:
 
 # ── pi / systemd ──────────────────────────────────────────────────────────────
 
-# Show HTTP server service status
+# Manage the MCP HTTP service — usage: just mcp [start|stop|restart|status|logs|enable]
+mcp action:
+    #!/usr/bin/env bash
+    case "{{action}}" in
+      start)
+        sudo systemctl start meticulous-mcp
+        systemctl is-active meticulous-mcp
+        ;;
+      stop)
+        sudo systemctl stop meticulous-mcp
+        ;;
+      restart)
+        sudo systemctl restart meticulous-mcp
+        systemctl is-active meticulous-mcp
+        ;;
+      status)
+        systemctl status meticulous-mcp
+        ;;
+      logs)
+        journalctl -u meticulous-mcp -f
+        ;;
+      enable)
+        sudo systemctl daemon-reload
+        sudo systemctl enable meticulous-mcp
+        sudo systemctl start meticulous-mcp
+        ;;
+      *)
+        echo "Usage: just mcp [start|stop|restart|status|logs|enable]"
+        exit 1
+        ;;
+    esac
+
+# Aliases for convenience
 status:
-    systemctl status meticulous-mcp
+    @just mcp status
 
-# Tail live logs from the HTTP server service
 logs:
-    journalctl -u meticulous-mcp -f
+    @just mcp logs
 
-# Restart the HTTP server service
 restart:
-    sudo systemctl restart meticulous-mcp
+    @just mcp restart
 
-# Stop the HTTP server service
 stop:
-    sudo systemctl stop meticulous-mcp
+    @just mcp stop
 
-# Enable + start the service (first time only)
 enable:
-    sudo systemctl daemon-reload
-    sudo systemctl enable meticulous-mcp
-    sudo systemctl start meticulous-mcp
+    @just mcp enable
 
 # ── deploy ────────────────────────────────────────────────────────────────────
 
