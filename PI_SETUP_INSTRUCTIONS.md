@@ -9,13 +9,13 @@ Run the MCP server on a Pi so it's reachable from claude.ai and Claude mobile vi
 ```
 claude.ai / Claude mobile
          │
-         ▼
-Cloudflare Tunnel (https://xxxx.trycloudflare.com/mcp)
+         ▼  (OAuth 2.0 client_credentials handshake, then Bearer token)
+Cloudflare Tunnel (https://xxxx.trycloudflare.com)
          │
          ▼
   Raspberry Pi :3000
          │
-  src/http.ts (Express + Bearer auth)
+  src/http.ts (Express + OAuth 2.0 + Bearer auth)
          │
   src/server.ts (all MCP tools)
          │
@@ -36,7 +36,9 @@ Your laptop uses `src/index.ts` → stdio → Claude Desktop / Claude Code — u
   just generate-token
   # or: npm run generate-token
   ```
-  Save this somewhere safe (password manager). You'll paste it in the `.env` file below and in claude.ai's connector settings.
+  Save this somewhere safe (password manager). This becomes your `MCP_AUTH_TOKEN` **and** the "token secret key" you enter in claude.ai.
+
+- Pick a client ID string — any short identifier works (e.g. `meticulous-mcp`). This becomes your `OAUTH_CLIENT_ID` and the "token secret id" you enter in claude.ai.
 
 ---
 
@@ -74,8 +76,12 @@ Paste (with your real values):
 ```env
 METICULOUS_IP=192.168.x.x
 MCP_AUTH_TOKEN=your-token-here
+OAUTH_CLIENT_ID=meticulous-mcp
 PORT=3000
 ```
+
+- `MCP_AUTH_TOKEN` — the token you generated above (keep it secret)
+- `OAUTH_CLIENT_ID` — any short identifier (e.g. `meticulous-mcp`). This is the "token secret id" you'll enter in claude.ai.
 
 Save: `Ctrl+X` → `Y` → `Enter`
 
@@ -98,6 +104,7 @@ Machine IP: 192.168.x.x
 Press `Ctrl+C` to stop. If it fails, check:
 - `METICULOUS_IP` is set to the correct IP (no `http://` prefix needed)
 - `MCP_AUTH_TOKEN` is non-empty
+- `OAUTH_CLIENT_ID` is non-empty
 
 ---
 
@@ -244,11 +251,26 @@ curl https://xxxx.trycloudflare.com/health
 
 ## Step 7 — Add connector in claude.ai
 
+claude.ai uses **OAuth 2.0 client credentials** to authenticate with remote MCP connectors.
+The server handles this automatically — you just need to fill in the four fields:
+
 1. Go to **claude.ai** → Profile → Settings → **Connectors**
 2. Click **Add custom connector**
-3. URL: `https://xxxx.trycloudflare.com/mcp`
-4. Enter your bearer token when prompted
-5. Should show as **connected**
+3. Fill in the form:
+
+| Field | Value |
+|-------|-------|
+| **Name** | Meticulous (or anything you like) |
+| **URL** | `https://xxxx.trycloudflare.com` *(tunnel URL, no `/mcp` suffix)* |
+| **Token secret id** | Value of `OAUTH_CLIENT_ID` from your `.env` (e.g. `meticulous-mcp`) |
+| **Token secret key** | Value of `MCP_AUTH_TOKEN` from your `.env` |
+
+4. Click **Save** — should show as **connected**
+
+> **How it works:** claude.ai fetches `/.well-known/oauth-authorization-server` to discover
+> the token endpoint, then exchanges your client ID + secret for an access token, which it
+> uses as a Bearer token on all subsequent `/mcp` requests. No action needed on your part —
+> it all happens automatically.
 
 Once added on claude.ai, it's available on Claude mobile too.
 
@@ -274,5 +296,5 @@ cd ~/meticulous-mcp-server && just deploy
 | `just status` shows failed | `just logs` for error details |
 | Health check returns connection refused | Service not running — `just enable` or `just restart` |
 | Tool calls return machine connection error | Check `METICULOUS_IP` in `.env`; verify with `curl http://192.168.x.x` from the Pi |
-| 401 on all requests | Token mismatch — compare `MCP_AUTH_TOKEN` in `.env` vs what you entered in claude.ai |
+| 401 / auth error in claude.ai | Verify `OAUTH_CLIENT_ID` matches "token secret id" and `MCP_AUTH_TOKEN` matches "token secret key" |
 | Cloudflare URL not reachable | Tunnel may have restarted (URL changes); re-run `cloudflared tunnel --url http://localhost:3000` |
