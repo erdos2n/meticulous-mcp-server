@@ -120,15 +120,22 @@ enable:
 
 # ── deploy ────────────────────────────────────────────────────────────────────
 
-# Pull latest code, reinstall, rebuild, and restart service
+# Pull latest code, reinstall, rebuild, and restart service (if enabled)
 deploy:
+    #!/usr/bin/env bash
+    set -euo pipefail
     git pull
     npm install
     npm run build
-    sudo systemctl restart meticulous-mcp
-    @echo "✅ Deployed. Service restarted."
-    @sleep 1
-    systemctl is-active meticulous-mcp
+    if systemctl is-enabled meticulous-mcp &>/dev/null; then
+      sudo systemctl restart meticulous-mcp
+      sleep 1
+      systemctl is-active meticulous-mcp
+      echo "✅ Deployed. Service restarted."
+    else
+      echo "✅ Built and updated."
+      echo "   Service not set up yet — run: just enable"
+    fi
 
 # ── sanity tests ──────────────────────────────────────────────────────────────
 
