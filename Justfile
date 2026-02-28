@@ -152,6 +152,34 @@ dev-http:
 dev:
     npx tsx src/index.ts
 
+# ── check ─────────────────────────────────────────────────────────────────────
+
+# Show status of MCP server + tunnel + current tunnel URL in one shot
+check:
+    #!/usr/bin/env bash
+    echo "── MCP server ───────────────────────────────"
+    systemctl is-active meticulous-mcp && echo "  ✅ running" || echo "  ❌ not running — try: just restart"
+    echo ""
+    echo "── Cloudflare tunnel ────────────────────────"
+    if systemctl is-active --quiet cloudflared-tunnel 2>/dev/null; then
+      echo "  ✅ running"
+      URL=$(journalctl -u cloudflared-tunnel --no-pager | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' | tail -1)
+      if [ -n "$URL" ]; then
+        echo "  🌐 $URL/mcp"
+      else
+        echo "  ⚠️  URL not found yet — try again in a few seconds"
+      fi
+    elif [ -f /tmp/cloudflared.pid ] && kill -0 "$(cat /tmp/cloudflared.pid)" 2>/dev/null; then
+      echo "  ✅ running (background)"
+      URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' /tmp/cloudflared.log | tail -1)
+      [ -n "$URL" ] && echo "  🌐 $URL/mcp" || echo "  ⚠️  URL not found yet"
+    else
+      echo "  ❌ not running — try: just enable-tunnel"
+    fi
+    echo ""
+    echo "── Health endpoint ──────────────────────────"
+    curl -s http://localhost:${PORT:-3000}/health | jq . 2>/dev/null || echo "  ❌ not responding"
+
 # ── token ─────────────────────────────────────────────────────────────────────
 
 # Generate a secure bearer token for MCP_AUTH_TOKEN
