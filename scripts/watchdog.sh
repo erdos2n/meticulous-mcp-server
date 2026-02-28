@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Meticulous MCP watchdog
-# Checks that the MCP server and Cloudflare tunnel are running,
-# restarts them if not, and logs results.
+# Auto-restarts the MCP server if it goes down.
+# Checks the Cloudflare tunnel status but does NOT restart it —
+# restarting cloudflared assigns a new random URL and breaks the claude.ai connector.
 #
 # Install via: just watchdog-install
 # Runs every 5 minutes as root (needed to control system services)
@@ -25,11 +26,13 @@ else
 fi
 
 # ── Cloudflare tunnel ─────────────────────────────────────────────────────────
+# ⚠️  Do NOT auto-restart cloudflared — restarting gives a new random
+# trycloudflare.com URL, which breaks the claude.ai connector until you
+# manually update it. Just alert so you can intervene intentionally.
 if systemctl is-active --quiet cloudflared-tunnel; then
   echo "[$TS] ✅ cloudflared-tunnel running" >> "$LOG"
 else
-  systemctl start cloudflared-tunnel
-  echo "[$TS] ⚠️  cloudflared-tunnel was down — restarted" >> "$LOG"
+  echo "[$TS] ❌ cloudflared-tunnel is DOWN — manual restart required (restarting changes the tunnel URL)" >> "$LOG"
 fi
 
 # ── Health endpoint ───────────────────────────────────────────────────────────
