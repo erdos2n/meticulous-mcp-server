@@ -180,6 +180,37 @@ check:
     echo "── Health endpoint ──────────────────────────"
     curl -s http://localhost:${PORT:-3000}/health | jq . 2>/dev/null || echo "  ❌ not responding"
 
+# ── watchdog ──────────────────────────────────────────────────────────────────
+
+# Install watchdog cron job — checks services every 5 min and restarts if down
+watchdog-install:
+    #!/usr/bin/env bash
+    SCRIPT="$(pwd)/scripts/watchdog.sh"
+    chmod +x "$SCRIPT"
+    (sudo crontab -l 2>/dev/null | grep -v 'watchdog.sh'; echo "*/5 * * * * $SCRIPT") | sudo crontab -
+    echo "✅ Watchdog installed — runs every 5 minutes as root"
+    echo "   Log: /tmp/meticulous-watchdog.log"
+    echo "   View: just watchdog-logs"
+    echo "   Remove: just watchdog-remove"
+
+# Remove watchdog cron job
+watchdog-remove:
+    #!/usr/bin/env bash
+    sudo crontab -l 2>/dev/null | grep -v 'watchdog.sh' | sudo crontab -
+    echo "Watchdog cron removed"
+
+# Show last 50 lines of watchdog log
+watchdog-logs:
+    @tail -50 /tmp/meticulous-watchdog.log 2>/dev/null || echo "No watchdog log yet — run: just watchdog-install"
+
+# Show only warnings and errors from watchdog log (restarts and failures)
+watchdog-alerts:
+    @grep -E "⚠️|❌" /tmp/meticulous-watchdog.log 2>/dev/null || echo "No alerts in log"
+
+# Check whether watchdog cron is installed
+watchdog-status:
+    @sudo crontab -l 2>/dev/null | grep watchdog || echo "Watchdog not installed — run: just watchdog-install"
+
 # ── token ─────────────────────────────────────────────────────────────────────
 
 # Generate a secure bearer token for MCP_AUTH_TOKEN
