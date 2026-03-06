@@ -92,7 +92,7 @@ setInterval(() => {
 
 // Discovery metadata — claude.ai fetches this to find the authorization + token endpoints
 app.get("/.well-known/oauth-authorization-server", (req, res) => {
-  const base = `${req.protocol}://${req.get("host")}`;
+  const base = `https://${req.get("host")}`;
   res.json({
     issuer: base,
     authorization_endpoint: `${base}/authorize`,
