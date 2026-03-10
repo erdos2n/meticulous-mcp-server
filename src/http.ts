@@ -3,7 +3,7 @@
  *
  * Used on a Raspberry Pi (or any always-on machine) to expose the MCP server
  * over HTTP so it can be reached by claude.ai / Claude mobile via a
- * Cloudflare Tunnel. All shared logic lives in server.ts.
+ * Tailscale or Cloudflare Tunnel. All shared logic lives in server.ts.
  *
  * Environment variables:
  *   METICULOUS_IP    - IP of your Meticulous machine on your local network (required)
@@ -22,6 +22,11 @@
  * In claude.ai connector settings:
  *   - Token secret id  →  value of OAUTH_CLIENT_ID in your .env
  *   - Token secret key →  value of MCP_AUTH_TOKEN in your .env
+ *
+ * Keepalive:
+ *   The server self-pings /health every 3 minutes after startup. This prevents
+ *   claude.ai from dropping the connector session due to ~5 min idle timeout.
+ *   Logs to console as "[keepalive]" lines — safe to ignore.
  */
 
 import { createHash, randomBytes } from "crypto";
@@ -219,7 +224,7 @@ app.get("/mcp", requireAuth, async (req, res) => {
 });
 
 // ============================================================
-// HEALTH CHECK — no auth (used by Cloudflare and monitoring)
+// HEALTH CHECK — no auth (used by Tailscale/Cloudflare and keepalive)
 // ============================================================
 
 app.get("/health", (_req, res) => {
@@ -227,7 +232,7 @@ app.get("/health", (_req, res) => {
 });
 
 // ============================================================
-// START
+// START + KEEPALIVE
 // ============================================================
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
@@ -235,6 +240,27 @@ app.listen(PORT, () => {
   console.log(`Meticulous MCP HTTP server running on port ${PORT}`);
   console.log(`Machine IP: ${METICULOUS_IP}`);
   console.log(`OAuth client ID: ${OAUTH_CLIENT_ID}`);
+
+  // Self-ping keepalive: hits /health every 3 minutes to prevent claude.ai
+  // from dropping the connector session due to idle timeout (~5 min observed).
+  // Runs entirely within the process — no cron or external tooling needed.
+  const KEEPALIVE_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
+  const healthUrl = `http://localhost:${PORT}/health`;
+
+  setInterval(async () => {
+    try {
+      const res = await fetch(healthUrl);
+      if (!res.ok) {
+        console.warn(`[keepalive] /health returned ${res.status}`);
+      } else {
+        console.log(`[keepalive] ping ok — ${new Date().toISOString()}`);
+      }
+    } catch (err) {
+      console.warn(`[keepalive] ping failed: ${err}`);
+    }
+  }, KEEPALIVE_INTERVAL_MS);
+
+  console.log(`[keepalive] self-ping active every ${KEEPALIVE_INTERVAL_MS / 1000}s → ${healthUrl}`);
 });
 
 // Log unhandled errors loudly rather than crashing silently.
