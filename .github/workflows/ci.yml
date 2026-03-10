@@ -1,0 +1,76 @@
+name: CI — Build & Smoke Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (tsc)
+        run: npm run build
+
+      # ── Smoke test: start the HTTP server and verify /health ──────────────
+      # We pass dummy env vars — the server validates them at startup.
+      # If the process crashes (bad import, syntax error, etc.) the curl fails.
+      - name: Start HTTP server (background)
+        env:
+          METICULOUS_IP: "192.168.1.1"   # dummy — no real machine needed
+          MCP_AUTH_TOKEN: "ci-test-token"
+          OAUTH_CLIENT_ID: "ci-test-client"
+          PORT: "3099"
+        run: |
+          node dist/http.js &
+          echo $! > /tmp/mcp-server.pid
+          # Give it 3 seconds to boot
+          sleep 3
+
+      - name: Health check
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3099/health)
+          if [ "$STATUS" != "200" ]; then
+            echo "❌ /health returned HTTP $STATUS (expected 200)"
+            exit 1
+          fi
+          echo "✅ /health → 200 OK"
+
+      - name: Auth rejection check
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:3099/mcp)
+          if [ "$STATUS" != "401" ]; then
+            echo "❌ Unauthenticated /mcp returned HTTP $STATUS (expected 401)"
+            exit 1
+          fi
+          echo "✅ Unauthenticated /mcp → 401 Unauthorized"
+
+      - name: OAuth discovery check
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3099/.well-known/oauth-authorization-server)
+          if [ "$STATUS" != "200" ]; then
+            echo "❌ OAuth discovery returned HTTP $STATUS (expected 200)"
+            exit 1
+          fi
+          echo "✅ OAuth discovery → 200 OK"
+
+      - name: Stop HTTP server
+        if: always()
+        run: |
+          if [ -f /tmp/mcp-server.pid ]; then
+            kill "$(cat /tmp/mcp-server.pid)" 2>/dev/null || true
+          fi
