@@ -135,14 +135,6 @@ See **[LLM_SETUP.md](./LLM_SETUP.md)** for all installation paths — laptop, cl
 
 ---
 
-## Is it safe to share?
-
-**Yes, with one note.** The repo contains no credentials — no tokens, no IPs, no secrets. The `.env` file and generated data files (`~/.meticulous-mcp/`) are gitignored and never leave your machine.
-
-The only thing to be mindful of: if you're running the HTTP server on a Pi with a public Cloudflare Tunnel, anyone with your tunnel URL + credentials can control your machine. Keep `MCP_AUTH_TOKEN` and `OAUTH_CLIENT_ID` out of any public pastes or screenshots.
-
----
-
 ## Project layout
 
 ```
