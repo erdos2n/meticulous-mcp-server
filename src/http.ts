@@ -87,9 +87,6 @@ interface AuthCode {
 }
 const authCodes = new Map<string, AuthCode>();
 
-// In-memory registry for dynamically registered OAuth clients (RFC 7591)
-const dynamicClients = new Map<string, { redirect_uris: string[] }>();
-
 // Clean up expired codes every 10 minutes
 setInterval(() => {
   const now = Date.now();
@@ -105,37 +102,10 @@ app.get("/.well-known/oauth-authorization-server", (req, res) => {
     issuer: base,
     authorization_endpoint: `${base}/authorize`,
     token_endpoint: `${base}/oauth/token`,
-    registration_endpoint: `${base}/register`,
     grant_types_supported: ["authorization_code"],
     response_types_supported: ["code"],
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
-  });
-});
-
-// Registration endpoint — Anthropic hits this before /authorize to obtain a client_id (RFC 7591)
-app.post("/register", (req, res) => {
-  const { redirect_uris, client_name } = req.body ?? {};
-  if (!redirect_uris?.length) {
-    res.status(400).json({
-      error: "invalid_client_metadata",
-      error_description: "redirect_uris required",
-    });
-    return;
-  }
-
-  const client_id = `dyn_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  dynamicClients.set(client_id, { redirect_uris });
-
-  console.log(`[register] new client: ${client_id} (${client_name ?? "unnamed"})`);
-
-  res.status(201).json({
-    client_id,
-    client_id_issued_at: Math.floor(Date.now() / 1000),
-    redirect_uris,
-    grant_types: ["authorization_code"],
-    response_types: ["code"],
-    token_endpoint_auth_method: "none",
   });
 });
 
@@ -149,7 +119,7 @@ app.get("/authorize", (req, res) => {
     res.status(400).json({ error: "unsupported_response_type" });
     return;
   }
-  if (client_id !== OAUTH_CLIENT_ID && !dynamicClients.has(client_id)) {
+  if (client_id !== OAUTH_CLIENT_ID) {
     res.status(401).json({ error: "invalid_client" });
     return;
   }
