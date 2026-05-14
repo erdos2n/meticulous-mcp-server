@@ -14,6 +14,7 @@
     "start": "node dist/index.js",
     "start:stdio": "node dist/index.js",
     "start:http": "node dist/http.js",
+    "test": "vitest run",
     "generate-token": "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
   },
   "dependencies": {
@@ -29,7 +30,8 @@
     "@types/node": "^20.19.33",
     "tsup": "^8.0.0",
     "tsx": "^4.0.0",
-    "typescript": "^5.1.6"
+    "typescript": "^5.1.6",
+    "vitest": "^1.0.0"
   },
   "engines": {
     "node": ">=18"
