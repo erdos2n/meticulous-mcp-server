@@ -43,6 +43,10 @@ const getApi = () => new ApiClient(undefined, BASE_URL);
 // RECIPE VALIDATION & REPAIR
 // ============================================================
 
+// UUIDs must be strictly hex (0-9, a-f). Non-hex chars like 'g' are invalid
+// and will cause the machine to store a profile it cannot retrieve or delete.
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function validateProfile(profile: Record<string, unknown>): {
   valid: boolean;
   errors: string[];
@@ -51,12 +55,12 @@ function validateProfile(profile: Record<string, unknown>): {
 
   if (!profile.name || typeof profile.name !== "string")
     errors.push("Missing or invalid 'name' (must be a non-empty string)");
-  if (!profile.id || typeof profile.id !== "string")
-    errors.push("Missing or invalid 'id' (must be a UUID string)");
+  if (!profile.id || typeof profile.id !== "string" || !UUID_REGEX.test(profile.id as string))
+    errors.push("Missing or invalid 'id' (must be a valid UUID — hex chars 0-9 and a-f only, e.g. 550e8400-e29b-41d4-a716-446655440000)");
   if (!profile.author || typeof profile.author !== "string")
     errors.push("Missing or invalid 'author'");
-  if (!profile.author_id || typeof profile.author_id !== "string")
-    errors.push("Missing or invalid 'author_id' (must be a UUID string)");
+  if (!profile.author_id || typeof profile.author_id !== "string" || !UUID_REGEX.test(profile.author_id as string))
+    errors.push("Missing or invalid 'author_id' (must be a valid UUID — hex chars 0-9 and a-f only)");
   if (typeof profile.temperature !== "number" || profile.temperature <= 0)
     errors.push("Missing or invalid 'temperature' (must be a positive number)");
   if (typeof profile.final_weight !== "number" || profile.final_weight <= 0)
@@ -95,8 +99,13 @@ function validateProfile(profile: Record<string, unknown>): {
 
 // Fills in structurally missing fields that don't require human judgment
 function repairProfile(profile: Record<string, unknown>): Record<string, unknown> {
-  if (!profile.id) profile.id = randomUUID();
-  if (!profile.author_id) profile.author_id = randomUUID();
+  // Always generate a fresh UUID if missing OR if the existing one is invalid
+  if (!profile.id || typeof profile.id !== "string" || !UUID_REGEX.test(profile.id as string)) {
+    profile.id = randomUUID();
+  }
+  if (!profile.author_id || typeof profile.author_id !== "string" || !UUID_REGEX.test(profile.author_id as string)) {
+    profile.author_id = randomUUID();
+  }
   if (!profile.author) profile.author = "AI Generated";
   if (!Array.isArray(profile.previous_authors)) profile.previous_authors = [];
   if (!Array.isArray(profile.variables)) profile.variables = [];
