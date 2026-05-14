@@ -1,17 +1,17 @@
 /**
  * Meticulous Espresso MCP Server — shared logic
  *
- * This module contains all tools, machine API helpers, and recipe validation.
- * It is transport-agnostic: imported by both index.ts (stdio) and http.ts (HTTP).
+ * Transport-agnostic: imported by both index.ts (stdio) and http.ts (HTTP).
+ * Validation logic lives in validation.ts.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import Api from "@meticulous-home/espresso-api";
-import { randomUUID } from "crypto";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { validateProfile, repairProfile } from "./validation.js";
 
 type ApiConstructor = new (options?: unknown, base_url?: string) => any;
 const ApiClient = (Api as unknown as { default?: ApiConstructor }).default ?? (Api as unknown as ApiConstructor);
@@ -40,78 +40,8 @@ const BASE_URL = MACHINE_IP.startsWith("http")
 const getApi = () => new ApiClient(undefined, BASE_URL);
 
 // ============================================================
-// RECIPE VALIDATION & REPAIR
+// SHOT SUMMARY HELPERS
 // ============================================================
-
-// UUIDs must be strictly hex (0-9, a-f). Non-hex chars like 'g' are invalid
-// and will cause the machine to store a profile it cannot retrieve or delete.
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function validateProfile(profile: Record<string, unknown>): {
-  valid: boolean;
-  errors: string[];
-} {
-  const errors: string[] = [];
-
-  if (!profile.name || typeof profile.name !== "string")
-    errors.push("Missing or invalid 'name' (must be a non-empty string)");
-  if (!profile.id || typeof profile.id !== "string" || !UUID_REGEX.test(profile.id as string))
-    errors.push("Missing or invalid 'id' (must be a valid UUID — hex chars 0-9 and a-f only, e.g. 550e8400-e29b-41d4-a716-446655440000)");
-  if (!profile.author || typeof profile.author !== "string")
-    errors.push("Missing or invalid 'author'");
-  if (!profile.author_id || typeof profile.author_id !== "string" || !UUID_REGEX.test(profile.author_id as string))
-    errors.push("Missing or invalid 'author_id' (must be a valid UUID — hex chars 0-9 and a-f only)");
-  if (typeof profile.temperature !== "number" || profile.temperature <= 0)
-    errors.push("Missing or invalid 'temperature' (must be a positive number)");
-  if (typeof profile.final_weight !== "number" || profile.final_weight <= 0)
-    errors.push("Missing or invalid 'final_weight' (must be a positive number)");
-
-  if (!Array.isArray(profile.stages) || (profile.stages as unknown[]).length === 0) {
-    errors.push("'stages' must be a non-empty array");
-  } else {
-    (profile.stages as Record<string, unknown>[]).forEach((stage, i) => {
-      const prefix = `Stage[${i}] "${stage.name || "unnamed"}"`;
-      if (!stage.name) errors.push(`${prefix}: missing 'name'`);
-      if (!stage.key) errors.push(`${prefix}: missing 'key'`);
-      if (!["flow", "pressure"].includes(stage.type as string))
-        errors.push(`${prefix}: 'type' must be "flow" or "pressure"`);
-
-      const dyn = stage.dynamics as Record<string, unknown> | undefined;
-      if (!dyn || !Array.isArray(dyn.points) || (dyn.points as unknown[]).length === 0)
-        errors.push(`${prefix}: 'dynamics.points' must be a non-empty array`);
-      if (dyn && dyn.over !== "time")
-        errors.push(`${prefix}: 'dynamics.over' must be "time"`);
-
-      if (!Array.isArray(stage.exit_triggers) || (stage.exit_triggers as unknown[]).length === 0)
-        errors.push(`${prefix}: 'exit_triggers' must be a non-empty array`);
-    });
-
-    // Last stage must exit on weight
-    const lastStage = (profile.stages as Record<string, unknown>[]).at(-1);
-    const triggers = lastStage?.exit_triggers as Record<string, unknown>[] | undefined;
-    const hasWeightExit = triggers?.some((t) => t.type === "weight");
-    if (!hasWeightExit)
-      errors.push("Last stage must have an exit_trigger of type 'weight' equal to final_weight");
-  }
-
-  return { valid: errors.length === 0, errors };
-}
-
-// Fills in structurally missing fields that don't require human judgment
-function repairProfile(profile: Record<string, unknown>): Record<string, unknown> {
-  // Always generate a fresh UUID if missing OR if the existing one is invalid
-  if (!profile.id || typeof profile.id !== "string" || !UUID_REGEX.test(profile.id as string)) {
-    profile.id = randomUUID();
-  }
-  if (!profile.author_id || typeof profile.author_id !== "string" || !UUID_REGEX.test(profile.author_id as string)) {
-    profile.author_id = randomUUID();
-  }
-  if (!profile.author) profile.author = "AI Generated";
-  if (!Array.isArray(profile.previous_authors)) profile.previous_authors = [];
-  if (!Array.isArray(profile.variables)) profile.variables = [];
-  if (profile.version === undefined) profile.version = 1;
-  return profile;
-}
 
 function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -763,7 +693,6 @@ server.tool(
       };
     }
 
-    // Re-validate after repair to see if auto-fix resolved everything
     const revalidation = validateProfile(repaired);
     if (revalidation.valid) {
       return {
