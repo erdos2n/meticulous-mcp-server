@@ -152,14 +152,6 @@ meticulous-mcp-server/
 
 ---
 
-## npm release checklist
+## License
 
-When ready to publish so users can run `npx -y meticulous-mcp-server`:
-
-```bash
-npm whoami                          # confirm logged in
-npm ci && npm run build             # clean build
-npm version patch                   # bump version
-npm publish --access public         # publish
-npx -y meticulous-mcp-server        # smoke test
-```
+MIT — see [LICENSE](./LICENSE). Maintainer release steps are in [RELEASING.md](./RELEASING.md).
