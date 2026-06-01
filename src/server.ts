@@ -12,6 +12,7 @@ import { randomUUID } from "crypto";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { registerCompositeTools } from "./tools/composite.js";
 
 type ApiConstructor = new (options?: unknown, base_url?: string) => any;
 const ApiClient = (Api as unknown as { default?: ApiConstructor }).default ?? (Api as unknown as ApiConstructor);
@@ -211,7 +212,8 @@ Help the user dial in their espresso by analyzing shots, interpreting tasting fe
 3. Combine sensor data + tasting notes to diagnose the extraction.
 4. Propose specific recipe changes (temperature, pressure curve, yield, preinfusion) and explain why.
 5. Use load_profile to push changes to the machine for the next shot. Save with save_profile once the user is happy.
-6. Update grinder context with set_grinder_context whenever the grind setting changes.
+6. For small changes to existing profiles (temperature, description, yield), use update_profile instead of save_profile — it preserves the profile image and avoids duplicates.
+7. Update grinder context with set_grinder_context whenever the grind setting changes.
 
 ## Recipe generation rules
 - Always base new recipes on get_default_profiles or the user's existing profiles — don't invent from scratch.
@@ -998,6 +1000,12 @@ server.tool(
     };
   }
 );
+
+// ============================================================
+// COMPOSITE TOOLS
+// ============================================================
+
+registerCompositeTools(server, getApi, validateProfile, repairProfile);
 
 return server;
 }
